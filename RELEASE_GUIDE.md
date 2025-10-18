@@ -1,152 +1,117 @@
-# Release and Auto-Update Guide
+# Release Guide - One Command Workflow
 
-This guide explains how to release new versions and enable automatic updates for installed apps.
+## Quick Start
 
-## Prerequisites
-
-1. Push your code to a public GitHub repository
-2. Update the `publish` section in `package.json`:
-   ```json
-   "publish": {
-     "provider": "github",
-     "owner": "YOUR_GITHUB_USERNAME",
-     "repo": "YOUR_REPO_NAME"
-   }
-   ```
-
-## How Auto-Updates Work
-
-- When the app starts, it checks GitHub Releases for new versions
-- If a new version is found, users are prompted to download it
-- After download, users can restart to install the update
-- Updates are only checked in production builds (not during development)
-
-## Releasing a New Version
-
-### Method 1: Using npm scripts (Recommended)
-
-Bump version and push tag automatically:
+After making changes, run ONE command:
 
 ```bash
-# For a patch release (1.0.0 -> 1.0.1)
-npm run release:patch
+# 1. Commit your changes first
+git add .
+git commit -m "Description of changes"
 
-# For a minor release (1.0.0 -> 1.1.0)
-npm run release:minor
-
-# For a major release (1.0.0 -> 2.0.0)
-npm run release:major
+# 2. Release (choose one)
+npm run release:patch   # Bug fixes: 1.0.7 -> 1.0.8
+npm run release:minor   # New features: 1.0.7 -> 1.1.0
+npm run release:major   # Breaking changes: 1.0.7 -> 2.0.0
 ```
 
-These commands will:
-1. Update the version in `package.json`
-2. Create a git commit
-3. Create a git tag (e.g., `v1.0.1`)
-4. Push the commit and tag to GitHub
+Done! Users will automatically get the update notification when they restart the app.
 
-### Method 2: Manual release
+## What Happens
 
-```bash
-# Update version in package.json manually or use:
-npm version patch  # or minor, or major
+When you run `npm run release:patch`:
 
-# Push the tag
-git push --follow-tags
-```
+1. Bumps version in `package.json` (e.g., 1.0.7 -> 1.0.8)
+2. Creates git tag `v1.0.8`
+3. Pushes commit and tag to GitHub
+4. GitHub Actions automatically:
+   - Builds the app on Windows
+   - Creates installer with auto-updater configured
+   - Publishes to GitHub Releases with all required files
+5. Installed apps check for updates on next launch
+6. Users see "Update Available" dialog
+7. Update downloads and installs on restart
 
-## GitHub Actions Workflow
+## First-Time Setup (Already Done!)
 
-When you push a tag (e.g., `v1.0.1`), the GitHub Actions workflow automatically:
+Your repo is configured:
+- Repository: `blehew-augeo/flowforge`
+- GitHub Actions workflow: `.github/workflows/release.yml`
+- Auto-updater enabled in `app/main/main.ts`
+- No manual tokens needed (uses automatic `GITHUB_TOKEN`)
 
-1. Builds the application
-2. Creates Windows installers (NSIS and portable)
-3. Creates a GitHub Release
-4. Uploads the installers to the release
+## Monitoring Releases
 
-The workflow file is at `.github/workflows/release.yml`
+After running the release command:
 
-## What Gets Published
+1. Go to https://github.com/blehew-augeo/flowforge/actions
+2. Watch the "Build and Release" workflow (takes 3-5 minutes)
+3. Once complete, release appears at https://github.com/blehew-augeo/flowforge/releases
 
-For each release, these files are created and uploaded:
+The release should include:
+- `Data Workflow System Setup 1.0.X.exe` - Installer
+- `Data Workflow System Setup 1.0.X.exe.blockmap` - Update verification
+- `Data Workflow System 1.0.X.exe` - Portable version
+- `latest.yml` - Update metadata (critical for auto-update)
 
-- `Data Workflow System Setup X.X.X.exe` - Full installer (NSIS)
-- `Data Workflow System X.X.X.exe` - Portable version
-- `Data Workflow System Setup X.X.X.exe.blockmap` - For delta updates
-- `latest.yml` - Update metadata file (used by auto-updater)
+## Semantic Versioning
 
-## Testing Auto-Updates
+Choose the right release type:
 
-1. Release version 1.0.0:
-   ```bash
-   npm run release:patch  # or release:minor/major
-   ```
+- **Patch** (`npm run release:patch`): Bug fixes, small changes
+  - Example: 1.0.7 -> 1.0.8
+- **Minor** (`npm run release:minor`): New features, backward compatible
+  - Example: 1.0.7 -> 1.1.0
+- **Major** (`npm run release:major`): Breaking changes
+  - Example: 1.0.7 -> 2.0.0
 
-2. Install the app using the generated installer
+## Testing Updates Locally
 
-3. Make some changes to your code
+To test the update flow:
 
-4. Release version 1.0.1:
-   ```bash
-   npm run release:patch
-   ```
-
-5. Start the installed app - it should prompt you about the available update
-
-## Update Behavior
-
-- **Check frequency**: On app startup (3 seconds delay)
-- **Download**: Manual (user confirms)
-- **Install**: Manual (user confirms restart)
-- **Auto-install on quit**: Enabled (installs when app is closed if update was downloaded)
+1. Install current version (e.g., v1.0.7)
+2. Release new version (e.g., v1.0.8)
+3. Wait for GitHub Actions to complete
+4. Launch the installed v1.0.7 app
+5. After 3 seconds, check logs at:
+   - `%AppData%/Data Workflow System/logs/main.log`
+   - Look for `[UPDATE]` messages
+6. Should see "Update available: 1.0.8" dialog
 
 ## Troubleshooting
 
-### Updates not detected
+**No update prompt appears:**
+- Check logs: `%AppData%/Data Workflow System/logs/main.log`
+- Verify release is marked as "Production" (not pre-release) on GitHub
+- Confirm `latest.yml` exists in the release assets
+- Ensure installed version is lower than release version
 
-- Verify the `publish` config in `package.json` has correct owner/repo
-- Check that GitHub Release was created successfully
-- Ensure the release includes `latest.yml` file
-- Check console logs for update errors
+**GitHub Actions fails:**
+- Check the Actions tab for error details
+- Common causes:
+  - Build errors (fix in code)
+  - Test failures (fix tests or skip with `--no-verify`)
 
-### Build fails on GitHub Actions
+**Update downloads but won't install:**
+- Make sure user installed via Setup.exe (not portable)
+- Check if antivirus is blocking the installer
+- Try running app as administrator
 
-- Verify all dependencies are in `package.json` (not just `devDependencies`)
-- Check that `build/icon.ico` exists in the repository
-- Review GitHub Actions logs for specific errors
+## Logs Location
 
-### Users can't download updates
+Update logs are written to:
+- Windows: `%AppData%/Data Workflow System/logs/main.log`
 
-- Ensure your GitHub repository is public
-- Check that release assets are publicly accessible
-- Verify users have internet connectivity
+Look for lines starting with `[UPDATE]` to see update check status.
 
-## Version Numbering
+## Advanced: Manual Publishing
 
-Follow semantic versioning:
-- **Patch** (1.0.X): Bug fixes, minor changes
-- **Minor** (1.X.0): New features, backwards compatible
-- **Major** (X.0.0): Breaking changes
+If you need to build locally instead of using GitHub Actions:
 
-## Security Notes
+```bash
+# Requires GH_TOKEN environment variable
+$env:GH_TOKEN = "your_github_token_here"
+npm run publish
+```
 
-- The auto-updater verifies code signatures (if you add code signing)
-- Updates are downloaded over HTTPS from GitHub
-- Users must confirm before downloading/installing updates
-- No automatic silent updates without user consent
-
-## Code Signing (Optional but Recommended)
-
-For production releases, sign your code with a certificate:
-
-1. Obtain a code signing certificate
-2. Add to `package.json`:
-   ```json
-   "win": {
-     "certificateFile": "path/to/cert.pfx",
-     "certificatePassword": "env:CSC_KEY_PASSWORD"
-   }
-   ```
-3. Set `CSC_KEY_PASSWORD` in GitHub Actions secrets
-
-Signed apps avoid Windows SmartScreen warnings.
-
+Not recommended - GitHub Actions provides clean builds in isolated environment.

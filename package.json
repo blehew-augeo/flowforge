@@ -1,6 +1,6 @@
 {
   "name": "data-workflow-system",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Data Workflow System - Electron app with TypeScript, React, and Vite",
   "main": "out/main/index.js",
   "type": "module",

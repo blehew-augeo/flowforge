@@ -7,6 +7,7 @@ import keytar from 'keytar'
 import * as XLSX from 'xlsx'
 import pkg from 'electron-updater'
 const { autoUpdater } = pkg
+import log from 'electron-log'
 
 // =============================================================================
 // SETTINGS MANAGER
@@ -1277,14 +1278,30 @@ function setupAutoUpdater() {
   // Configure auto-updater
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.logger = log
+  log.transports.file.level = 'info'
+
+  // Log basic app/update context
+  try {
+    log.info(`[UPDATE] App ${app.getName()} v${app.getVersion()}`)
+    const updateConfigPath = path.join(process.resourcesPath, 'app-update.yml')
+    if (fs.existsSync(updateConfigPath)) {
+      const cfg = fs.readFileSync(updateConfigPath, 'utf-8')
+      log.info('[UPDATE] app-update.yml found:\n' + cfg)
+    } else {
+      log.warn('[UPDATE] app-update.yml not found in resources (portable build cannot auto-update)')
+    }
+  } catch (e) {
+    log.error('[UPDATE] Failed to log update context:', e)
+  }
 
   // Log update events
   autoUpdater.on('checking-for-update', () => {
-    console.log('[UPDATE] Checking for updates...')
+    log.info('[UPDATE] Checking for updates...')
   })
 
   autoUpdater.on('update-available', (info) => {
-    console.log('[UPDATE] Update available:', info.version)
+    log.info('[UPDATE] Update available: ' + info.version)
     
     // Ask user if they want to download the update
     if (mainWindow) {
@@ -1304,15 +1321,15 @@ function setupAutoUpdater() {
   })
 
   autoUpdater.on('update-not-available', () => {
-    console.log('[UPDATE] No updates available')
+    log.info('[UPDATE] No updates available')
   })
 
   autoUpdater.on('download-progress', (progress) => {
-    console.log(`[UPDATE] Download progress: ${Math.round(progress.percent)}%`)
+    log.info(`[UPDATE] Download progress: ${Math.round(progress.percent)}%`)
   })
 
   autoUpdater.on('update-downloaded', (info) => {
-    console.log('[UPDATE] Update downloaded:', info.version)
+    log.info('[UPDATE] Update downloaded: ' + info.version)
     
     // Ask user if they want to install and restart
     if (mainWindow) {
@@ -1332,7 +1349,7 @@ function setupAutoUpdater() {
   })
 
   autoUpdater.on('error', (error) => {
-    console.error('[UPDATE] Error:', error)
+    log.error('[UPDATE] Error:', error)
   })
 
   // Check for updates on startup (skip in development)
@@ -1340,7 +1357,7 @@ function setupAutoUpdater() {
     // Wait 3 seconds after app start to check for updates
     setTimeout(() => {
       autoUpdater.checkForUpdates().catch(err => {
-        console.error('[UPDATE] Failed to check for updates:', err)
+        log.error('[UPDATE] Failed to check for updates:', err)
       })
     }, 3000)
   }

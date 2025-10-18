@@ -1349,7 +1349,16 @@ function setupAutoUpdater() {
   })
 
   autoUpdater.on('error', (error) => {
-    log.error('[UPDATE] Error:', error)
+    const errMsg = error instanceof Error ? error.message : String(error)
+    
+    // Detect common cases and log appropriately
+    if (errMsg.includes('Unable to find latest version') || errMsg.includes('HttpError: 406')) {
+      log.info('[UPDATE] No production releases available on GitHub yet')
+    } else if (errMsg.includes('ENOTFOUND') || errMsg.includes('ETIMEDOUT')) {
+      log.warn('[UPDATE] Update check failed: Network unavailable')
+    } else {
+      log.error('[UPDATE] Update check failed:', errMsg)
+    }
   })
 
   // Check for updates on startup (skip in development)
@@ -1357,7 +1366,12 @@ function setupAutoUpdater() {
     // Wait 3 seconds after app start to check for updates
     setTimeout(() => {
       autoUpdater.checkForUpdates().catch(err => {
-        log.error('[UPDATE] Failed to check for updates:', err)
+        const errMsg = err instanceof Error ? err.message : String(err)
+        if (errMsg.includes('Unable to find latest version') || errMsg.includes('HttpError: 406')) {
+          log.info('[UPDATE] No production releases available yet - first install or waiting for releases')
+        } else {
+          log.warn('[UPDATE] Update check skipped:', errMsg)
+        }
       })
     }, 3000)
   }

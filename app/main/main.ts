@@ -5,7 +5,8 @@ import * as fs from 'fs'
 import * as crypto from 'crypto'
 import keytar from 'keytar'
 import * as XLSX from 'xlsx'
-import { autoUpdater } from 'electron-updater'
+import pkg from 'electron-updater'
+const { autoUpdater } = pkg
 
 // =============================================================================
 // SETTINGS MANAGER

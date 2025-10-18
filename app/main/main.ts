@@ -5,6 +5,7 @@ import * as fs from 'fs'
 import * as crypto from 'crypto'
 import keytar from 'keytar'
 import * as XLSX from 'xlsx'
+import { autoUpdater } from 'electron-updater'
 
 // =============================================================================
 // SETTINGS MANAGER
@@ -1267,6 +1268,83 @@ function createWindow() {
   }
 }
 
+// =============================================================================
+// AUTO-UPDATER
+// =============================================================================
+
+function setupAutoUpdater() {
+  // Configure auto-updater
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+
+  // Log update events
+  autoUpdater.on('checking-for-update', () => {
+    console.log('[UPDATE] Checking for updates...')
+  })
+
+  autoUpdater.on('update-available', (info) => {
+    console.log('[UPDATE] Update available:', info.version)
+    
+    // Ask user if they want to download the update
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Update Available',
+        message: `A new version (${info.version}) is available. Would you like to download it now?`,
+        buttons: ['Download', 'Later'],
+        defaultId: 0,
+        cancelId: 1
+      }).then(result => {
+        if (result.response === 0) {
+          autoUpdater.downloadUpdate()
+        }
+      })
+    }
+  })
+
+  autoUpdater.on('update-not-available', () => {
+    console.log('[UPDATE] No updates available')
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    console.log(`[UPDATE] Download progress: ${Math.round(progress.percent)}%`)
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('[UPDATE] Update downloaded:', info.version)
+    
+    // Ask user if they want to install and restart
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Update Ready',
+        message: `Version ${info.version} has been downloaded. Restart the application to install the update?`,
+        buttons: ['Restart Now', 'Later'],
+        defaultId: 0,
+        cancelId: 1
+      }).then(result => {
+        if (result.response === 0) {
+          autoUpdater.quitAndInstall(false, true)
+        }
+      })
+    }
+  })
+
+  autoUpdater.on('error', (error) => {
+    console.error('[UPDATE] Error:', error)
+  })
+
+  // Check for updates on startup (skip in development)
+  if (!process.env['VITE_DEV_SERVER_URL']) {
+    // Wait 3 seconds after app start to check for updates
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(err => {
+        console.error('[UPDATE] Failed to check for updates:', err)
+      })
+    }, 3000)
+  }
+}
+
 app.whenReady().then(async () => {
   // Initialize settings manager first
   getSettingsManager()
@@ -1289,6 +1367,9 @@ app.whenReady().then(async () => {
   setupIpcHandlers()
   
   createWindow()
+  
+  // Setup auto-updater after window is created
+  setupAutoUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

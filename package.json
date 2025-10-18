@@ -17,7 +17,10 @@
     "test:e2e:ui": "playwright test --ui",
     "package": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win"
+    "dist:win": "npm run build && electron-builder --win",
+    "release:patch": "npm version patch && git push --follow-tags",
+    "release:minor": "npm version minor && git push --follow-tags",
+    "release:major": "npm version major && git push --follow-tags"
   },
   "keywords": [
     "electron",
@@ -31,18 +34,19 @@
   "dependencies": {
     "@radix-ui/react-label": "^2.0.2",
     "@radix-ui/react-separator": "^1.0.3",
+    "electron-updater": "^6.6.2",
     "httpntlm": "^1.7.7",
     "keytar": "^7.9.0",
     "xlsx": "^0.18.5",
     "zod": "^3.22.4"
   },
   "devDependencies": {
-    "electron": "^38.3.0",
     "@playwright/test": "^1.47.0",
     "@types/node": "^20.10.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^4.2.0",
+    "electron": "^38.3.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^4.0.1",
     "playwright": "^1.47.0",
@@ -81,8 +85,15 @@
       {
         "from": "node_modules/keytar/build/Release",
         "to": ".",
-        "filter": ["*.node"]
+        "filter": [
+          "*.node"
+        ]
       }
-    ]
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "REPLACE_WITH_YOUR_GITHUB_USERNAME",
+      "repo": "REPLACE_WITH_YOUR_REPO_NAME"
+    }
   }
 }

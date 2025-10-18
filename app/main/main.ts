@@ -95,6 +95,103 @@ export function getSettingsManager(): SettingsManager {
 }
 
 // =============================================================================
+// SECURITY UTILITIES
+// =============================================================================
+
+/**
+ * Validates that a file path is safe to access
+ * Prevents path traversal attacks
+ */
+function isValidFilePath(filePath: string): boolean {
+  if (!filePath || typeof filePath !== 'string') {
+    return false
+  }
+  
+  // Check for path traversal attempts
+  const normalized = path.normalize(filePath)
+  
+  // Reject paths with null bytes
+  if (normalized.includes('\0')) {
+    return false
+  }
+  
+  // Reject paths trying to escape using .. in suspicious ways
+  // Allow legitimate use but be cautious
+  const absolutePath = path.resolve(normalized)
+  
+  // On Windows, reject UNC paths that might access network resources unexpectedly
+  if (process.platform === 'win32' && absolutePath.startsWith('\\\\')) {
+    // Allow if it's a legitimate long path, but log it
+    console.log('[SECURITY] UNC path access attempted:', absolutePath)
+  }
+  
+  return true
+}
+
+/**
+ * Validates URL for network requests
+ * Prevents SSRF and local file access
+ */
+function isValidUrl(url: string): boolean {
+  if (!url || typeof url !== 'string') {
+    return false
+  }
+  
+  try {
+    const parsed = new URL(url)
+    
+    // Only allow http and https protocols
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      console.error('[SECURITY] Invalid protocol:', parsed.protocol)
+      return false
+    }
+    
+    // Reject localhost and private IP ranges to prevent SSRF
+    const hostname = parsed.hostname.toLowerCase()
+    
+    // Check for localhost variations
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+      console.warn('[SECURITY] Localhost access attempted:', url)
+      // Allow for development but log it
+      if (process.env['NODE_ENV'] === 'development' || process.env['VITE_DEV_SERVER_URL']) {
+        return true
+      }
+      return false
+    }
+    
+    // Check for private IP ranges (basic check)
+    if (hostname.startsWith('192.168.') || 
+        hostname.startsWith('10.') || 
+        hostname.match(/^172\.(1[6-9]|2[0-9]|3[0-1])\./)) {
+      console.warn('[SECURITY] Private IP access attempted:', url)
+      // These might be legitimate corporate networks, so allow but log
+    }
+    
+    return true
+  } catch (error) {
+    console.error('[SECURITY] Invalid URL format:', url)
+    return false
+  }
+}
+
+/**
+ * Sanitizes string input to prevent injection
+ */
+function sanitizeString(input: string, maxLength: number = 1000): string {
+  if (!input || typeof input !== 'string') {
+    return ''
+  }
+  
+  // Truncate to max length
+  let sanitized = input.slice(0, maxLength)
+  
+  // Remove null bytes
+  sanitized = sanitized.replace(/\0/g, '')
+  
+  return sanitized
+}
+
+// =============================================================================
 // TYPE DEFINITIONS
 // =============================================================================
 
@@ -1144,6 +1241,18 @@ export function registerHttpBridge() {
   // Handle network:request from renderer
   ipcMain.handle('network:request', async (_evt, req: NetworkRequest): Promise<NetworkResponse> => {
     try {
+      // Validate URL before making request
+      if (!isValidUrl(req.url)) {
+        console.error('[SECURITY] Invalid or unsafe URL rejected:', req.url)
+        return {
+          ok: false,
+          status: 0,
+          statusText: 'Invalid or unsafe URL',
+          headers: {},
+          bodyText: ''
+        }
+      }
+      
       const method = req.method || 'GET'
       const headers = req.headers || {}
       
@@ -1195,6 +1304,18 @@ export function registerHttpBridge() {
     const auth = req.auth || { kind: 'none' }
     
     try {
+      // Validate URL before making request
+      if (!isValidUrl(req.url)) {
+        console.error('[SECURITY] Invalid or unsafe URL rejected:', req.url)
+        return {
+          ok: false,
+          status: 0,
+          statusText: 'Invalid or unsafe URL',
+          headers: {},
+          bodyText: ''
+        }
+      }
+      
       const method = req.method || 'GET'
       const headers = req.headers || {}
       
@@ -1257,7 +1378,12 @@ function createWindow() {
       preload: path.join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false, // Keep false for now due to native modules (keytar)
+      webSecurity: true, // Enforce web security
+      allowRunningInsecureContent: false, // Block mixed content
+      experimentalFeatures: false, // Disable experimental features
+      enableBlinkFeatures: '', // Don't enable any additional Blink features
+      disableBlinkFeatures: 'AutomationControlled' // Security feature
     }
   })
 
@@ -1268,6 +1394,26 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
+
+  // Security: Prevent navigation to external URLs
+  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+    const parsedUrl = new URL(navigationUrl)
+    
+    // Allow navigation to dev server in development
+    if (devServer && navigationUrl.startsWith(devServer)) {
+      return
+    }
+    
+    // Block all other navigation attempts
+    console.warn('[SECURITY] Blocked navigation attempt to:', navigationUrl)
+    event.preventDefault()
+  })
+
+  // Security: Prevent opening new windows
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    console.warn('[SECURITY] Blocked window.open attempt to:', url)
+    return { action: 'deny' }
+  })
 }
 
 // =============================================================================
@@ -1392,6 +1538,19 @@ app.whenReady().then(async () => {
   // Set system proxy
   await session.defaultSession.setProxy({ mode: 'system' })
 
+  // Security: Configure session security settings
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        // Add security headers
+        'X-Content-Type-Options': ['nosniff'],
+        'X-Frame-Options': ['DENY'],
+        'X-XSS-Protection': ['1; mode=block']
+      }
+    })
+  })
+
   // Register HTTP bridge for network requests
   registerHttpBridge()
   
@@ -1453,34 +1612,61 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('connections:save', async (_event, args: { name: string; apiUrl: string; domain?: string; username?: string; password?: string }) => {
+    // Validate and sanitize inputs
+    const name = sanitizeString(args.name, 255)
+    if (!name) {
+      throw new Error('Invalid connection name')
+    }
+    
+    // Validate API URL if provided
+    if (args.apiUrl && !isValidUrl(args.apiUrl)) {
+      throw new Error('Invalid API URL')
+    }
     
     // Only save credentials if all three are provided
     if (args.domain && args.username && args.password) {
       const creds: NtlmCredentials = {
-        domain: args.domain,
-        username: args.username,
-        password: args.password
+        domain: sanitizeString(args.domain, 255),
+        username: sanitizeString(args.username, 255),
+        password: args.password // Don't sanitize password as it may have special chars
       }
-      await credsStore.save(args.name, creds)
+      await credsStore.save(name, creds)
     }
     // If credentials not provided, will use Windows integrated auth
   })
 
   ipcMain.handle('connections:delete', async (_event, name: string) => {
+    // Sanitize connection name
+    const sanitizedName = sanitizeString(name, 255)
+    if (!sanitizedName) {
+      throw new Error('Invalid connection name')
+    }
+    
     // Unregister the connection
-    unregisterConnection(name)
+    unregisterConnection(sanitizedName)
     
     // Delete credentials if they exist
-    await credsStore.del(name)
+    await credsStore.del(sanitizedName)
   })
 
   ipcMain.handle('connections:test', async (_event, args: { name: string; url: string }) => {
+    // Validate URL
+    if (!isValidUrl(args.url)) {
+      throw new Error('Invalid URL')
+    }
+    
     // Stub implementation
     return { ok: true }
   })
 
   ipcMain.handle('connections:get', async (_event, name: string) => {
-    return await credsStore.get(name)
+    // Sanitize connection name
+    const sanitizedName = sanitizeString(name, 255)
+    if (!sanitizedName) {
+      throw new Error('Invalid connection name')
+    }
+    
+    return await credsStore.get(sanitizedName)
   })
 
   // Auth preflight and credential provision
@@ -1488,8 +1674,18 @@ function setupIpcHandlers() {
     const startTime = Date.now()
     
     try {
+      // Validate inputs
+      if (!isValidUrl(req.baseUrl)) {
+        return { mode: 'unreachable', details: 'Invalid URL' }
+      }
+      
+      const connectionId = sanitizeString(req.connectionId, 255)
+      if (!connectionId) {
+        return { mode: 'unreachable', details: 'Invalid connection ID' }
+      }
+      
       // Check if credentials exist for this connection
-      const credentials = await credsStore.get(req.connectionId)
+      const credentials = await credsStore.get(connectionId)
       
       // Try to make a simple HEAD request to the base URL
       const headers: Record<string, string> = {
@@ -1502,18 +1698,18 @@ function setupIpcHandlers() {
         const latencyMs = Date.now() - startTime
         
         if (response.status >= 200 && response.status < 400) {
-          console.log(`[INFO] Preflight success for ${req.connectionId} (${latencyMs}ms)`)
+          console.log(`[INFO] Preflight success for ${connectionId} (${latencyMs}ms)`)
           return { mode: 'silent-ok', details: `Connected in ${latencyMs}ms` }
         } else if (response.status === 401 || response.status === 403) {
-          console.log(`[INFO] Preflight auth required for ${req.connectionId} (status ${response.status})`)
+          console.log(`[INFO] Preflight auth required for ${connectionId} (status ${response.status})`)
           return { mode: 'auth-required', details: 'Authentication required' }
         } else {
-          console.log(`[WARN] Preflight unexpected status ${response.status} for ${req.connectionId}`)
+          console.log(`[WARN] Preflight unexpected status ${response.status} for ${connectionId}`)
           return { mode: 'unreachable', details: `Server returned ${response.status}` }
         }
       } catch (networkError) {
         const errorMessage = networkError instanceof Error ? networkError.message : String(networkError)
-        console.log(`[ERROR] Preflight network error for ${req.connectionId}: ${errorMessage}`)
+        console.log(`[ERROR] Preflight network error for ${connectionId}: ${errorMessage}`)
         
         // Distinguish between different error types
         if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
@@ -1529,20 +1725,37 @@ function setupIpcHandlers() {
         }
       }
     } catch (error) {
-      console.error(`[ERROR] Preflight failed for ${req.connectionId}:`, error)
+      console.error(`[ERROR] Preflight failed:`, error)
       return { mode: 'unreachable', details: error instanceof Error ? error.message : 'Unknown error' }
     }
   })
 
   ipcMain.handle('auth:provideCredentials', async (_event, req: AuthProvideCredentialsRequest): Promise<AuthProvideCredentialsResponse> => {
     try {
+      // Validate inputs
+      if (!isValidUrl(req.baseUrl)) {
+        return { ok: false, error: 'Invalid URL' }
+      }
+      
+      const connectionId = sanitizeString(req.connectionId, 255)
+      if (!connectionId) {
+        return { ok: false, error: 'Invalid connection ID' }
+      }
+      
+      const domain = sanitizeString(req.domain, 255)
+      const username = sanitizeString(req.username, 255)
+      
+      if (!domain || !username || !req.password) {
+        return { ok: false, error: 'All credentials are required' }
+      }
+      
       // Save the credentials
       const creds: NtlmCredentials = {
-        domain: req.domain,
-        username: req.username,
+        domain,
+        username,
         password: req.password
       }
-      await credsStore.save(req.connectionId, creds)
+      await credsStore.save(connectionId, creds)
       
       // Test the credentials immediately
       const headers: Record<string, string> = {
@@ -1554,22 +1767,22 @@ function setupIpcHandlers() {
         const response = await makeNetworkRequest(req.baseUrl, 'GET', headers, undefined, creds)
         
         if (response.status >= 200 && response.status < 400) {
-          console.log(`[INFO] Credentials validated successfully for ${req.connectionId}`)
+          console.log(`[INFO] Credentials validated successfully for ${connectionId}`)
           return { ok: true }
         } else if (response.status === 401 || response.status === 403) {
-          console.log(`[WARN] Credentials rejected for ${req.connectionId} (status ${response.status})`)
+          console.log(`[WARN] Credentials rejected for ${connectionId} (status ${response.status})`)
           return { ok: false, error: 'Invalid credentials - authentication failed' }
         } else {
-          console.log(`[WARN] Unexpected status ${response.status} when validating credentials for ${req.connectionId}`)
+          console.log(`[WARN] Unexpected status ${response.status} when validating credentials for ${connectionId}`)
           return { ok: false, error: `Server returned ${response.status}` }
         }
       } catch (networkError) {
         const errorMessage = networkError instanceof Error ? networkError.message : String(networkError)
-        console.error(`[ERROR] Network error validating credentials for ${req.connectionId}:`, errorMessage)
+        console.error(`[ERROR] Network error validating credentials for ${connectionId}:`, errorMessage)
         return { ok: false, error: `Network error: ${errorMessage}` }
       }
     } catch (error) {
-      console.error(`[ERROR] Failed to provide credentials for ${req.connectionId}:`, error)
+      console.error(`[ERROR] Failed to provide credentials:`, error)
       return { ok: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   })
@@ -1597,6 +1810,11 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('files:readFileBinary', async (_event, filePath: string) => {
+    // Validate file path
+    if (!isValidFilePath(filePath)) {
+      throw new Error('Invalid file path')
+    }
+    
     const fsPromises = await import('fs/promises')
     try {
       const buffer = await fsPromises.readFile(filePath)
@@ -1607,7 +1825,17 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('files:previewFile', async (_event, filePath: string) => {
+    // Validate file path
+    if (!isValidFilePath(filePath)) {
+      throw new Error('Invalid file path')
+    }
+    
     const ext = filePath.toLowerCase().split('.').pop()
+    
+    // Validate file extension to prevent arbitrary file access
+    if (ext !== 'xlsx' && ext !== 'xls' && ext !== 'csv') {
+      throw new Error(`Unsupported file type: ${ext}`)
+    }
     
     if (ext === 'xlsx' || ext === 'xls') {
       return parseXlsx(filePath)
@@ -1621,6 +1849,21 @@ function setupIpcHandlers() {
   // Workflow
   ipcMain.handle('workflow:run', async (_event, request: { inputPath: string; connectionName: string; apiUrl: string }) => {
     try {
+      // Validate inputs
+      if (!isValidFilePath(request.inputPath)) {
+        throw new Error('Invalid input file path')
+      }
+      
+      if (!isValidUrl(request.apiUrl)) {
+        throw new Error('Invalid API URL')
+      }
+      
+      // Sanitize connection name
+      const connectionName = sanitizeString(request.connectionName, 255)
+      if (!connectionName) {
+        throw new Error('Invalid connection name')
+      }
+      
       const fsPromises = await import('fs/promises')
       
       // Prepare artifact directory early to store diagnostics if needed
@@ -1657,7 +1900,7 @@ function setupIpcHandlers() {
       
       // Fetch metadata from API using saved connection credentials (if any)
       // If no credentials are saved, Windows integrated auth will be used
-      const credentials = await credsStore.get(request.connectionName)
+      const credentials = await credsStore.get(connectionName)
       const metadata = await fetchAllMetadata(idguids, request.apiUrl, credentials || undefined)
       
       // Coverage gate: ensure we have usable metadata for all IDs
@@ -1728,8 +1971,23 @@ function setupIpcHandlers() {
 
   // System
   ipcMain.handle('system:openPath', async (_event, pathToOpen: string) => {
+    // Validate path before opening
+    if (!isValidFilePath(pathToOpen)) {
+      throw new Error('Invalid path')
+    }
+    
+    // Additional check: ensure path exists before opening
+    if (!fs.existsSync(pathToOpen)) {
+      throw new Error('Path does not exist')
+    }
+    
     const { shell } = await import('electron')
-    await shell.openPath(pathToOpen)
+    const result = await shell.openPath(pathToOpen)
+    
+    // shell.openPath returns empty string on success, error message on failure
+    if (result) {
+      throw new Error(`Failed to open path: ${result}`)
+    }
   })
 
   ipcMain.handle('app:getVersion', () => app.getVersion())

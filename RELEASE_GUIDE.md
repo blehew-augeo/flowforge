@@ -104,6 +104,21 @@ Update logs are written to:
 
 Look for lines starting with `[UPDATE]` to see update check status.
 
+## Cleaning Up Old Releases
+
+Old releases are automatically cleaned up weekly, keeping the 5 most recent releases:
+
+- Runs every Sunday at 2 AM UTC
+- Keeps the latest 5 releases
+- Deletes older release assets (saves storage)
+- Keeps git tags (preserves version history)
+
+**Manual cleanup:**
+Go to https://github.com/blehew-augeo/flowforge/actions/workflows/cleanup-releases.yml and click "Run workflow"
+
+**Change retention policy:**
+Edit `.github/workflows/cleanup-releases.yml` and change `keep_latest: 5` to your preferred number.
+
 ## Advanced: Manual Publishing
 
 If you need to build locally instead of using GitHub Actions:

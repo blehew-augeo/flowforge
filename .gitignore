@@ -7,5 +7,6 @@ out/
 .idea/
 artifacts/
 test-results/
+**/repomix-output.xml
 
 

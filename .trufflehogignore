@@ -1,0 +1,25 @@
+# Ignore build outputs, dependencies, artifacts, and binaries
+node_modules/
+dist/
+out/
+artifacts/
+test-results/
+*.log
+*.exe
+*.dll
+*.pak
+*.bin
+*.blockmap
+*.ico
+*.icns
+*.asar
+*.asar.unpacked/
+*.html
+
+# Ignore Playwright traces and temp files
+**/.playwright/
+**/playwright-report/
+
+# Ignore repomix packed output file
+repomix-output.xml
+

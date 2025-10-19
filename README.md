@@ -1,4 +1,4 @@
-# Data Workflow System
+# FlowForge
 
 A secure Electron application built with TypeScript, React, and Vite for data workflow management.
 

@@ -1,4 +1,4 @@
-# Building Data Workflow System for Distribution
+# Building FlowForge for Distribution
 
 This guide explains how to create an installable package for end users.
 
@@ -16,7 +16,7 @@ Creates an unpacked directory you can test without creating an installer:
 ```bash
 npm run package
 ```
-Output: `dist/win-unpacked/Data Workflow System.exe`
+Output: `dist/win-unpacked/FlowForge.exe`
 
 ### Full Distribution Build
 Creates installer + portable versions:
@@ -25,8 +25,8 @@ npm run dist:win
 ```
 
 Output files in `dist/`:
-- `Data Workflow System Setup X.X.X.exe` - Full installer (NSIS)
-- `Data Workflow System X.X.X.exe` - Portable version (no install required)
+- `FlowForge Setup X.X.X.exe` - Full installer (NSIS)
+- `FlowForge X.X.X.exe` - Portable version (no install required)
 
 ## What Gets Built
 
@@ -58,8 +58,8 @@ Configuration is in `package.json` under the `"build"` section:
 ```json
 {
   "build": {
-    "appId": "com.dataworkflow.system",
-    "productName": "Data Workflow System",
+    "appId": "com.flowforge.app",
+    "productName": "FlowForge",
     "win": {
       "target": ["nsis", "portable"]
     }
@@ -77,12 +77,12 @@ Expected installer size: ~150-200 MB (includes Chromium, Node.js, and all depend
 ```bash
 npm run package
 cd dist/win-unpacked
-"Data Workflow System.exe"
+"FlowForge.exe"
 ```
 
 ### Test Installer
 1. Run `npm run dist:win`
-2. Run `dist/Data Workflow System Setup X.X.X.exe`
+2. Run `dist/FlowForge Setup X.X.X.exe`
 3. Follow installation wizard
 4. App launches from Start Menu or Desktop
 
@@ -123,7 +123,7 @@ For production, sign the installer with a code signing certificate:
 - App auto-updates via Electron's built-in updater
 
 ### End User Install Process
-1. Download/copy `Data Workflow System Setup X.X.X.exe`
+1. Download/copy `FlowForge Setup X.X.X.exe`
 2. Run installer (Windows SmartScreen may appear if unsigned)
 3. Choose installation directory
 4. Complete wizard

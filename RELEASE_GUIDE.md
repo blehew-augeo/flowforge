@@ -49,9 +49,9 @@ After running the release command:
 3. Once complete, release appears at https://github.com/blehew-augeo/flowforge/releases
 
 The release should include:
-- `Data Workflow System Setup 1.0.X.exe` - Installer
-- `Data Workflow System Setup 1.0.X.exe.blockmap` - Update verification
-- `Data Workflow System 1.0.X.exe` - Portable version
+- `FlowForge Setup 1.0.X.exe` - Installer
+- `FlowForge Setup 1.0.X.exe.blockmap` - Update verification
+- `FlowForge 1.0.X.exe` - Portable version
 - `latest.yml` - Update metadata (critical for auto-update)
 
 ## Semantic Versioning
@@ -74,14 +74,14 @@ To test the update flow:
 3. Wait for GitHub Actions to complete
 4. Launch the installed v1.0.7 app
 5. After 3 seconds, check logs at:
-   - `%AppData%/Data Workflow System/logs/main.log`
+   - `%AppData%/FlowForge/logs/main.log`
    - Look for `[UPDATE]` messages
 6. Should see "Update available: 1.0.8" dialog
 
 ## Troubleshooting
 
 **No update prompt appears:**
-- Check logs: `%AppData%/Data Workflow System/logs/main.log`
+- Check logs: `%AppData%/FlowForge/logs/main.log`
 - Verify release is marked as "Production" (not pre-release) on GitHub
 - Confirm `latest.yml` exists in the release assets
 - Ensure installed version is lower than release version
@@ -100,7 +100,7 @@ To test the update flow:
 ## Logs Location
 
 Update logs are written to:
-- Windows: `%AppData%/Data Workflow System/logs/main.log`
+- Windows: `%AppData%/FlowForge/logs/main.log`
 
 Look for lines starting with `[UPDATE]` to see update check status.
 

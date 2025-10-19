@@ -1,7 +1,7 @@
 {
-  "name": "data-workflow-system",
+  "name": "flowforge",
   "version": "1.0.10",
-  "description": "Data Workflow System - Electron app with TypeScript, React, and Vite",
+  "description": "FlowForge - Electron app with TypeScript, React, and Vite",
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {
@@ -60,8 +60,8 @@
     "vite": "^7.1.10"
   },
   "build": {
-    "appId": "com.dataworkflow.system",
-    "productName": "Data Workflow System",
+    "appId": "com.flowforge.app",
+    "productName": "FlowForge",
     "directories": {
       "output": "dist",
       "buildResources": "build"

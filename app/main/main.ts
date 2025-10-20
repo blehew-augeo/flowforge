@@ -456,7 +456,8 @@ async function makeNetworkRequest(
     const request = net.request({
       method: method.toUpperCase(),
       url: url,
-      session: session.defaultSession
+      session: session.defaultSession,
+      useSessionCookies: true
     })
 
     // Set headers
@@ -464,22 +465,73 @@ async function makeNetworkRequest(
       request.setHeader(key, value)
     }
 
-    // Store credentials for potential auth challenge
+    // Store credentials using base URL as key (protocol + host)
+    // This is important for proper auth handling
+    let baseUrl = url
+    try {
+      const urlObj = new URL(url)
+      baseUrl = `${urlObj.protocol}//${urlObj.host}`
+    } catch {
+      // If URL parsing fails, use full URL
+    }
+
     if (credentials) {
-      // Only log if this is a new URL we haven't seen before
-      const isNewUrl = !pendingAuthRequests.has(url)
+      // Only log if this is a new base URL we haven't seen before
+      const isNewUrl = !pendingAuthRequests.has(baseUrl)
       if (isNewUrl) {
-        log.info('[AUTH] Storing credentials for new URL:', url)
+        log.info('[AUTH] Storing credentials for base URL:', baseUrl)
         log.info('[AUTH] Domain:', credentials.domain)
         log.info('[AUTH] Username:', credentials.username)
       }
-      pendingAuthRequests.set(url, credentials)
+      pendingAuthRequests.set(baseUrl, credentials)
     }
 
     let responseData = ''
     let responseStatus = 0
     let responseStatusText = ''
     const responseHeaders: Record<string, string> = {}
+    let authAttempted = false
+
+    // CRITICAL: Per-request login handler for NTLM authentication
+    // The global app.on('login') doesn't reliably fire for net.request()
+    request.on('login', (authInfo, callback) => {
+      log.info('[AUTH] ==========================================')
+      log.info('[AUTH] Per-request login event triggered')
+      log.info('[AUTH] URL:', url)
+      log.info('[AUTH] Base URL:', baseUrl)
+      log.info('[AUTH] Auth scheme:', authInfo.scheme)
+      log.info('[AUTH] Auth realm:', authInfo.realm)
+      log.info('[AUTH] Auth host:', authInfo.host)
+      log.info('[AUTH] Auth port:', authInfo.port)
+      log.info('[AUTH] Is proxy:', authInfo.isProxy)
+      
+      const creds = pendingAuthRequests.get(baseUrl)
+      log.info('[AUTH] Has stored credentials for base URL:', !!creds)
+      
+      if (creds && !authAttempted) {
+        authAttempted = true
+        const username = creds.domain 
+          ? `${creds.domain}\\${creds.username}`
+          : creds.username
+        
+        log.info('[AUTH] Using explicit credentials from store')
+        log.info('[AUTH] Domain:', creds.domain)
+        log.info('[AUTH] Username (raw):', creds.username)
+        log.info('[AUTH] Username (formatted):', username)
+        log.info('[AUTH] Password length:', creds.password?.length || 0)
+        log.info('[AUTH] ==========================================')
+        
+        callback(username, creds.password)
+      } else {
+        if (authAttempted) {
+          log.info('[AUTH] Auth already attempted - avoiding retry loop')
+        } else {
+          log.info('[AUTH] No credentials found - trying Windows Integrated Auth')
+        }
+        log.info('[AUTH] ==========================================')
+        callback()  // Try without explicit credentials (Windows integrated auth)
+      }
+    })
 
     request.on('response', (response) => {
       responseStatus = response.statusCode
@@ -500,7 +552,15 @@ async function makeNetworkRequest(
       })
 
       response.on('end', () => {
-        pendingAuthRequests.delete(url)
+        // Log authentication result
+        if (responseStatus === 401) {
+          log.warn('[AUTH] Request to', url, 'returned 401 - authentication failed')
+          log.warn('[AUTH] WWW-Authenticate header:', responseHeaders['www-authenticate'] || 'not present')
+        } else if (responseStatus >= 200 && responseStatus < 300) {
+          log.info('[AUTH] Request to', url, 'succeeded with status', responseStatus)
+        }
+        
+        pendingAuthRequests.delete(baseUrl)
         resolve({
           status: responseStatus,
           statusText: responseStatusText,
@@ -511,7 +571,8 @@ async function makeNetworkRequest(
     })
 
     request.on('error', (error) => {
-      pendingAuthRequests.delete(url)
+      log.error('[AUTH] Request error for', url, ':', error.message)
+      pendingAuthRequests.delete(baseUrl)
       reject(error)
     })
 
@@ -1787,22 +1848,26 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('auth:provideCredentials', async (_event, req: AuthProvideCredentialsRequest): Promise<AuthProvideCredentialsResponse> => {
+    log.info('[AUTH] ==========================================')
+    log.info('[AUTH] CREDENTIAL PROVISION REQUEST')
     log.info('[AUTH] Receiving credentials for connection:', req.connectionId)
     log.info('[AUTH] Base URL:', req.baseUrl)
     log.info('[AUTH] Domain (raw):', req.domain)
     log.info('[AUTH] Username (raw):', req.username)
     log.info('[AUTH] Password length:', req.password?.length || 0)
+    log.info('[AUTH] Windows Username (for comparison):', process.env['USERNAME'])
+    log.info('[AUTH] Windows Domain (for comparison):', process.env['USERDOMAIN'])
     
     try {
       // Validate inputs
       if (!isValidUrl(req.baseUrl)) {
-        log.info('[AUTH] Invalid URL provided')
+        log.error('[AUTH] Invalid URL provided')
         return { ok: false, error: 'Invalid URL' }
       }
       
       const connectionId = sanitizeString(req.connectionId, 255)
       if (!connectionId) {
-        log.info('[AUTH] Invalid connection ID')
+        log.error('[AUTH] Invalid connection ID')
         return { ok: false, error: 'Invalid connection ID' }
       }
       
@@ -1813,7 +1878,7 @@ function setupIpcHandlers() {
       log.info('[AUTH] After sanitization - Username:', username)
       
       if (!domain || !username || !req.password) {
-        log.info('[AUTH] Missing required credentials after sanitization')
+        log.error('[AUTH] Missing required credentials after sanitization')
         return { ok: false, error: 'All credentials are required' }
       }
       
@@ -1823,9 +1888,17 @@ function setupIpcHandlers() {
         username,
         password: req.password
       }
-      log.info('[AUTH] Saving credentials to store for:', connectionId)
+      log.info('[AUTH] Saving credentials to keytar for:', connectionId)
       await credsStore.save(connectionId, creds)
-      log.info('[AUTH] Credentials saved successfully')
+      log.info('[AUTH] Credentials saved successfully to keytar')
+      
+      // Verify credentials were saved
+      const savedCreds = await credsStore.get(connectionId)
+      log.info('[AUTH] Verification - credentials retrieved from keytar:', !!savedCreds)
+      if (savedCreds) {
+        log.info('[AUTH] Verification - Domain matches:', savedCreds.domain === domain)
+        log.info('[AUTH] Verification - Username matches:', savedCreds.username === username)
+      }
       
       // Test the credentials immediately
       log.info('[AUTH] Testing credentials with network request to:', req.baseUrl)
@@ -1841,23 +1914,28 @@ function setupIpcHandlers() {
         log.info('[AUTH] Credential test response headers:', JSON.stringify(response.headers, null, 2))
         
         if (response.status >= 200 && response.status < 400) {
-          log.info(`[AUTH] Credentials validated successfully for ${connectionId}`)
+          log.info(`[AUTH] ✓ Credentials validated successfully for ${connectionId}`)
+          log.info('[AUTH] ==========================================')
           return { ok: true }
         } else if (response.status === 401 || response.status === 403) {
-          log.info(`[AUTH] Credentials rejected for ${connectionId} (status ${response.status})`)
-          log.info('[AUTH] Response body (first 500 chars):', response.body.substring(0, 500))
+          log.error(`[AUTH] ✗ Credentials rejected for ${connectionId} (status ${response.status})`)
+          log.error('[AUTH] Response body (first 500 chars):', response.body.substring(0, 500))
+          log.info('[AUTH] ==========================================')
           return { ok: false, error: 'Invalid credentials - authentication failed' }
         } else {
-          log.info(`[AUTH] Unexpected status ${response.status} when validating credentials for ${connectionId}`)
+          log.warn(`[AUTH] ? Unexpected status ${response.status} when validating credentials for ${connectionId}`)
+          log.info('[AUTH] ==========================================')
           return { ok: false, error: `Server returned ${response.status}` }
         }
       } catch (networkError) {
         const errorMessage = networkError instanceof Error ? networkError.message : String(networkError)
-        log.error(`[AUTH] Network error validating credentials for ${connectionId}:`, errorMessage)
+        log.error(`[AUTH] ✗ Network error validating credentials for ${connectionId}:`, errorMessage)
+        log.info('[AUTH] ==========================================')
         return { ok: false, error: `Network error: ${errorMessage}` }
       }
     } catch (error) {
       log.error(`[ERROR] Failed to provide credentials:`, error)
+      log.info('[AUTH] ==========================================')
       return { ok: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   })

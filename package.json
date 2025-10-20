@@ -1,6 +1,6 @@
 {
   "name": "flowforge",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "FlowForge - Electron app with TypeScript, React, and Vite",
   "main": "out/main/index.js",
   "type": "module",

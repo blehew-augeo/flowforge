@@ -466,7 +466,12 @@ async function makeNetworkRequest(
 
     // Store credentials for potential auth challenge
     if (credentials) {
+      console.log('[AUTH] Storing credentials for request to:', url)
+      console.log('[AUTH] Domain:', credentials.domain)
+      console.log('[AUTH] Username:', credentials.username)
       pendingAuthRequests.set(url, credentials)
+    } else {
+      console.log('[AUTH] No credentials provided for request to:', url)
     }
 
     let responseData = ''
@@ -1571,18 +1576,35 @@ app.whenReady().then(async () => {
 
 // Handle HTTP authentication challenges
 app.on('login', async (event, webContents, request, authInfo, callback) => {
-  event.preventDefault()
-  
   // Try to get credentials from pending auth requests
   const url = request.url
   const credentials = pendingAuthRequests.get(url)
   
+  console.log('[AUTH] Login event triggered')
+  console.log('[AUTH] URL:', url)
+  console.log('[AUTH] Auth scheme:', authInfo.scheme)
+  console.log('[AUTH] Auth realm:', authInfo.realm)
+  console.log('[AUTH] Has stored credentials:', !!credentials)
+  
   if (credentials) {
-    // Provide saved credentials for NTLM/Kerberos auth
-    callback(credentials.username, credentials.password)
+    // We have explicit credentials - use them
+    event.preventDefault()
+    
+    // For NTLM, username needs to be DOMAIN\username format
+    const username = credentials.domain 
+      ? `${credentials.domain}\\${credentials.username}`
+      : credentials.username
+    
+    console.log('[AUTH] Using explicit credentials')
+    console.log('[AUTH] Domain:', credentials.domain)
+    console.log('[AUTH] Username (raw):', credentials.username)
+    console.log('[AUTH] Username (formatted):', username)
+    console.log('[AUTH] Password length:', credentials.password?.length || 0)
+    
+    callback(username, credentials.password)
   } else {
-    // No credentials available - let auth fail
-    callback('', '')
+    console.log('[AUTH] No explicit credentials - using Windows Integrated Auth')
+    // Don't call event.preventDefault() so Electron uses the logged-in user's credentials
   }
 })
 
@@ -1673,19 +1695,29 @@ function setupIpcHandlers() {
   ipcMain.handle('auth:preflight', async (_event, req: AuthPreflightRequest): Promise<AuthPreflightResponse> => {
     const startTime = Date.now()
     
+    console.log('[PREFLIGHT] Starting preflight check for:', req.baseUrl)
+    console.log('[PREFLIGHT] Connection ID:', req.connectionId)
+    
     try {
       // Validate inputs
       if (!isValidUrl(req.baseUrl)) {
+        console.log('[PREFLIGHT] Invalid URL')
         return { mode: 'unreachable', details: 'Invalid URL' }
       }
       
       const connectionId = sanitizeString(req.connectionId, 255)
       if (!connectionId) {
+        console.log('[PREFLIGHT] Invalid connection ID')
         return { mode: 'unreachable', details: 'Invalid connection ID' }
       }
       
       // Check if credentials exist for this connection
+      console.log('[PREFLIGHT] Checking for stored credentials')
       const credentials = await credsStore.get(connectionId)
+      console.log('[PREFLIGHT] Credentials found:', !!credentials)
+      if (credentials) {
+        console.log('[PREFLIGHT] Will use credentials - Domain:', credentials.domain, 'Username:', credentials.username)
+      }
       
       // Try to make a simple HEAD request to the base URL
       const headers: Record<string, string> = {
@@ -1731,21 +1763,33 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('auth:provideCredentials', async (_event, req: AuthProvideCredentialsRequest): Promise<AuthProvideCredentialsResponse> => {
+    console.log('[AUTH] Receiving credentials for connection:', req.connectionId)
+    console.log('[AUTH] Base URL:', req.baseUrl)
+    console.log('[AUTH] Domain (raw):', req.domain)
+    console.log('[AUTH] Username (raw):', req.username)
+    console.log('[AUTH] Password length:', req.password?.length || 0)
+    
     try {
       // Validate inputs
       if (!isValidUrl(req.baseUrl)) {
+        console.log('[AUTH] Invalid URL provided')
         return { ok: false, error: 'Invalid URL' }
       }
       
       const connectionId = sanitizeString(req.connectionId, 255)
       if (!connectionId) {
+        console.log('[AUTH] Invalid connection ID')
         return { ok: false, error: 'Invalid connection ID' }
       }
       
       const domain = sanitizeString(req.domain, 255)
       const username = sanitizeString(req.username, 255)
       
+      console.log('[AUTH] After sanitization - Domain:', domain)
+      console.log('[AUTH] After sanitization - Username:', username)
+      
       if (!domain || !username || !req.password) {
+        console.log('[AUTH] Missing required credentials after sanitization')
         return { ok: false, error: 'All credentials are required' }
       }
       
@@ -1755,9 +1799,12 @@ function setupIpcHandlers() {
         username,
         password: req.password
       }
+      console.log('[AUTH] Saving credentials to store for:', connectionId)
       await credsStore.save(connectionId, creds)
+      console.log('[AUTH] Credentials saved successfully')
       
       // Test the credentials immediately
+      console.log('[AUTH] Testing credentials with network request to:', req.baseUrl)
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/json,*/*',
         'Cache-Control': 'no-cache'
@@ -1766,19 +1813,23 @@ function setupIpcHandlers() {
       try {
         const response = await makeNetworkRequest(req.baseUrl, 'GET', headers, undefined, creds)
         
+        console.log('[AUTH] Credential test response status:', response.status)
+        console.log('[AUTH] Credential test response headers:', JSON.stringify(response.headers, null, 2))
+        
         if (response.status >= 200 && response.status < 400) {
-          console.log(`[INFO] Credentials validated successfully for ${connectionId}`)
+          console.log(`[AUTH] Credentials validated successfully for ${connectionId}`)
           return { ok: true }
         } else if (response.status === 401 || response.status === 403) {
-          console.log(`[WARN] Credentials rejected for ${connectionId} (status ${response.status})`)
+          console.log(`[AUTH] Credentials rejected for ${connectionId} (status ${response.status})`)
+          console.log('[AUTH] Response body (first 500 chars):', response.body.substring(0, 500))
           return { ok: false, error: 'Invalid credentials - authentication failed' }
         } else {
-          console.log(`[WARN] Unexpected status ${response.status} when validating credentials for ${connectionId}`)
+          console.log(`[AUTH] Unexpected status ${response.status} when validating credentials for ${connectionId}`)
           return { ok: false, error: `Server returned ${response.status}` }
         }
       } catch (networkError) {
         const errorMessage = networkError instanceof Error ? networkError.message : String(networkError)
-        console.error(`[ERROR] Network error validating credentials for ${connectionId}:`, errorMessage)
+        console.error(`[AUTH] Network error validating credentials for ${connectionId}:`, errorMessage)
         return { ok: false, error: `Network error: ${errorMessage}` }
       }
     } catch (error) {
@@ -1900,8 +1951,18 @@ function setupIpcHandlers() {
       
       // Fetch metadata from API using saved connection credentials (if any)
       // If no credentials are saved, Windows integrated auth will be used
+      console.log('[WORKFLOW] Retrieving credentials for connection:', connectionName)
       const credentials = await credsStore.get(connectionName)
+      console.log('[WORKFLOW] Credentials found:', !!credentials)
+      if (credentials) {
+        console.log('[WORKFLOW] Using credentials - Domain:', credentials.domain, 'Username:', credentials.username)
+      } else {
+        console.log('[WORKFLOW] No credentials found - will use Windows Integrated Auth')
+      }
+      
+      console.log('[WORKFLOW] Fetching metadata for', idguids.length, 'users from:', request.apiUrl)
       const metadata = await fetchAllMetadata(idguids, request.apiUrl, credentials || undefined)
+      console.log('[WORKFLOW] Metadata fetch complete. Retrieved', metadata.size, 'entries')
       
       // Coverage gate: ensure we have usable metadata for all IDs
       const missingIds: string[] = []

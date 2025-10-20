@@ -466,12 +466,14 @@ async function makeNetworkRequest(
 
     // Store credentials for potential auth challenge
     if (credentials) {
-      log.info('[AUTH] Storing credentials for request to:', url)
-      log.info('[AUTH] Domain:', credentials.domain)
-      log.info('[AUTH] Username:', credentials.username)
+      // Only log if this is a new URL we haven't seen before
+      const isNewUrl = !pendingAuthRequests.has(url)
+      if (isNewUrl) {
+        log.info('[AUTH] Storing credentials for new URL:', url)
+        log.info('[AUTH] Domain:', credentials.domain)
+        log.info('[AUTH] Username:', credentials.username)
+      }
       pendingAuthRequests.set(url, credentials)
-    } else {
-      log.info('[AUTH] No credentials provided for request to:', url)
     }
 
     let responseData = ''
@@ -1528,6 +1530,20 @@ function setupAutoUpdater() {
   }
 }
 
+// =============================================================================
+// WINDOWS INTEGRATED AUTHENTICATION SETUP
+// =============================================================================
+// These command line switches must be set BEFORE app.whenReady()
+// They enable NTLM/Kerberos authentication for Windows Integrated Auth
+
+// Allow authentication for all servers (use specific domain in production for security)
+app.commandLine.appendSwitch('auth-server-whitelist', '*')
+app.commandLine.appendSwitch('auth-negotiate-delegate-whitelist', '*')
+// Enable authentication on non-standard ports
+app.commandLine.appendSwitch('enable-auth-negotiate-port', 'true')
+
+log.info('[AUTH] Windows Integrated Authentication enabled for all servers')
+
 app.whenReady().then(async () => {
   // Initialize settings manager first
   getSettingsManager()
@@ -1580,11 +1596,17 @@ app.on('login', async (event, webContents, request, authInfo, callback) => {
   const url = request.url
   const credentials = pendingAuthRequests.get(url)
   
+  log.info('[AUTH] ==========================================')
   log.info('[AUTH] Login event triggered')
   log.info('[AUTH] URL:', url)
   log.info('[AUTH] Auth scheme:', authInfo.scheme)
   log.info('[AUTH] Auth realm:', authInfo.realm)
+  log.info('[AUTH] Auth host:', authInfo.host)
+  log.info('[AUTH] Auth port:', authInfo.port)
+  log.info('[AUTH] Is proxy:', authInfo.isProxy)
   log.info('[AUTH] Has stored credentials:', !!credentials)
+  log.info('[AUTH] Windows Username:', process.env['USERNAME'])
+  log.info('[AUTH] Windows Domain:', process.env['USERDOMAIN'])
   
   if (credentials) {
     // We have explicit credentials - use them
@@ -1602,8 +1624,10 @@ app.on('login', async (event, webContents, request, authInfo, callback) => {
     log.info('[AUTH] Password length:', credentials.password?.length || 0)
     
     callback(username, credentials.password)
+    log.info('[AUTH] ==========================================')
   } else {
     log.info('[AUTH] No explicit credentials - using Windows Integrated Auth')
+    log.info('[AUTH] ==========================================')
     // Don't call event.preventDefault() so Electron uses the logged-in user's credentials
   }
 })

@@ -466,12 +466,12 @@ async function makeNetworkRequest(
 
     // Store credentials for potential auth challenge
     if (credentials) {
-      console.log('[AUTH] Storing credentials for request to:', url)
-      console.log('[AUTH] Domain:', credentials.domain)
-      console.log('[AUTH] Username:', credentials.username)
+      log.info('[AUTH] Storing credentials for request to:', url)
+      log.info('[AUTH] Domain:', credentials.domain)
+      log.info('[AUTH] Username:', credentials.username)
       pendingAuthRequests.set(url, credentials)
     } else {
-      console.log('[AUTH] No credentials provided for request to:', url)
+      log.info('[AUTH] No credentials provided for request to:', url)
     }
 
     let responseData = ''
@@ -1580,11 +1580,11 @@ app.on('login', async (event, webContents, request, authInfo, callback) => {
   const url = request.url
   const credentials = pendingAuthRequests.get(url)
   
-  console.log('[AUTH] Login event triggered')
-  console.log('[AUTH] URL:', url)
-  console.log('[AUTH] Auth scheme:', authInfo.scheme)
-  console.log('[AUTH] Auth realm:', authInfo.realm)
-  console.log('[AUTH] Has stored credentials:', !!credentials)
+  log.info('[AUTH] Login event triggered')
+  log.info('[AUTH] URL:', url)
+  log.info('[AUTH] Auth scheme:', authInfo.scheme)
+  log.info('[AUTH] Auth realm:', authInfo.realm)
+  log.info('[AUTH] Has stored credentials:', !!credentials)
   
   if (credentials) {
     // We have explicit credentials - use them
@@ -1595,15 +1595,15 @@ app.on('login', async (event, webContents, request, authInfo, callback) => {
       ? `${credentials.domain}\\${credentials.username}`
       : credentials.username
     
-    console.log('[AUTH] Using explicit credentials')
-    console.log('[AUTH] Domain:', credentials.domain)
-    console.log('[AUTH] Username (raw):', credentials.username)
-    console.log('[AUTH] Username (formatted):', username)
-    console.log('[AUTH] Password length:', credentials.password?.length || 0)
+    log.info('[AUTH] Using explicit credentials')
+    log.info('[AUTH] Domain:', credentials.domain)
+    log.info('[AUTH] Username (raw):', credentials.username)
+    log.info('[AUTH] Username (formatted):', username)
+    log.info('[AUTH] Password length:', credentials.password?.length || 0)
     
     callback(username, credentials.password)
   } else {
-    console.log('[AUTH] No explicit credentials - using Windows Integrated Auth')
+    log.info('[AUTH] No explicit credentials - using Windows Integrated Auth')
     // Don't call event.preventDefault() so Electron uses the logged-in user's credentials
   }
 })
@@ -1695,28 +1695,28 @@ function setupIpcHandlers() {
   ipcMain.handle('auth:preflight', async (_event, req: AuthPreflightRequest): Promise<AuthPreflightResponse> => {
     const startTime = Date.now()
     
-    console.log('[PREFLIGHT] Starting preflight check for:', req.baseUrl)
-    console.log('[PREFLIGHT] Connection ID:', req.connectionId)
+    log.info('[PREFLIGHT] Starting preflight check for:', req.baseUrl)
+    log.info('[PREFLIGHT] Connection ID:', req.connectionId)
     
     try {
       // Validate inputs
       if (!isValidUrl(req.baseUrl)) {
-        console.log('[PREFLIGHT] Invalid URL')
+        log.info('[PREFLIGHT] Invalid URL')
         return { mode: 'unreachable', details: 'Invalid URL' }
       }
       
       const connectionId = sanitizeString(req.connectionId, 255)
       if (!connectionId) {
-        console.log('[PREFLIGHT] Invalid connection ID')
+        log.info('[PREFLIGHT] Invalid connection ID')
         return { mode: 'unreachable', details: 'Invalid connection ID' }
       }
       
       // Check if credentials exist for this connection
-      console.log('[PREFLIGHT] Checking for stored credentials')
+      log.info('[PREFLIGHT] Checking for stored credentials')
       const credentials = await credsStore.get(connectionId)
-      console.log('[PREFLIGHT] Credentials found:', !!credentials)
+      log.info('[PREFLIGHT] Credentials found:', !!credentials)
       if (credentials) {
-        console.log('[PREFLIGHT] Will use credentials - Domain:', credentials.domain, 'Username:', credentials.username)
+        log.info('[PREFLIGHT] Will use credentials - Domain:', credentials.domain, 'Username:', credentials.username)
       }
       
       // Try to make a simple HEAD request to the base URL
@@ -1730,18 +1730,18 @@ function setupIpcHandlers() {
         const latencyMs = Date.now() - startTime
         
         if (response.status >= 200 && response.status < 400) {
-          console.log(`[INFO] Preflight success for ${connectionId} (${latencyMs}ms)`)
+          log.info(`[PREFLIGHT] Success for ${connectionId} (${latencyMs}ms)`)
           return { mode: 'silent-ok', details: `Connected in ${latencyMs}ms` }
         } else if (response.status === 401 || response.status === 403) {
-          console.log(`[INFO] Preflight auth required for ${connectionId} (status ${response.status})`)
+          log.info(`[PREFLIGHT] Auth required for ${connectionId} (status ${response.status})`)
           return { mode: 'auth-required', details: 'Authentication required' }
         } else {
-          console.log(`[WARN] Preflight unexpected status ${response.status} for ${connectionId}`)
+          log.warn(`[PREFLIGHT] Unexpected status ${response.status} for ${connectionId}`)
           return { mode: 'unreachable', details: `Server returned ${response.status}` }
         }
       } catch (networkError) {
         const errorMessage = networkError instanceof Error ? networkError.message : String(networkError)
-        console.log(`[ERROR] Preflight network error for ${connectionId}: ${errorMessage}`)
+        log.error(`[PREFLIGHT] Network error for ${connectionId}: ${errorMessage}`)
         
         // Distinguish between different error types
         if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
@@ -1750,46 +1750,46 @@ function setupIpcHandlers() {
           return { mode: 'unreachable', details: 'Connection refused or timed out' }
         } else if (errorMessage.includes('ERR_UNEXPECTED') || errorMessage.includes('ERR_FAILED') || errorMessage.includes('ERR_ABORTED')) {
           // NTLM/auth negotiation failures - likely means Windows integrated auth failed
-          console.log(`[INFO] Auth negotiation error detected, prompting for credentials`)
+          log.info(`[PREFLIGHT] Auth negotiation error detected, prompting for credentials`)
           return { mode: 'auth-required', details: 'Windows authentication failed - manual credentials required' }
         } else {
           return { mode: 'unreachable', details: errorMessage }
         }
       }
     } catch (error) {
-      console.error(`[ERROR] Preflight failed:`, error)
+      log.error(`[PREFLIGHT] Failed:`, error)
       return { mode: 'unreachable', details: error instanceof Error ? error.message : 'Unknown error' }
     }
   })
 
   ipcMain.handle('auth:provideCredentials', async (_event, req: AuthProvideCredentialsRequest): Promise<AuthProvideCredentialsResponse> => {
-    console.log('[AUTH] Receiving credentials for connection:', req.connectionId)
-    console.log('[AUTH] Base URL:', req.baseUrl)
-    console.log('[AUTH] Domain (raw):', req.domain)
-    console.log('[AUTH] Username (raw):', req.username)
-    console.log('[AUTH] Password length:', req.password?.length || 0)
+    log.info('[AUTH] Receiving credentials for connection:', req.connectionId)
+    log.info('[AUTH] Base URL:', req.baseUrl)
+    log.info('[AUTH] Domain (raw):', req.domain)
+    log.info('[AUTH] Username (raw):', req.username)
+    log.info('[AUTH] Password length:', req.password?.length || 0)
     
     try {
       // Validate inputs
       if (!isValidUrl(req.baseUrl)) {
-        console.log('[AUTH] Invalid URL provided')
+        log.info('[AUTH] Invalid URL provided')
         return { ok: false, error: 'Invalid URL' }
       }
       
       const connectionId = sanitizeString(req.connectionId, 255)
       if (!connectionId) {
-        console.log('[AUTH] Invalid connection ID')
+        log.info('[AUTH] Invalid connection ID')
         return { ok: false, error: 'Invalid connection ID' }
       }
       
       const domain = sanitizeString(req.domain, 255)
       const username = sanitizeString(req.username, 255)
       
-      console.log('[AUTH] After sanitization - Domain:', domain)
-      console.log('[AUTH] After sanitization - Username:', username)
+      log.info('[AUTH] After sanitization - Domain:', domain)
+      log.info('[AUTH] After sanitization - Username:', username)
       
       if (!domain || !username || !req.password) {
-        console.log('[AUTH] Missing required credentials after sanitization')
+        log.info('[AUTH] Missing required credentials after sanitization')
         return { ok: false, error: 'All credentials are required' }
       }
       
@@ -1799,12 +1799,12 @@ function setupIpcHandlers() {
         username,
         password: req.password
       }
-      console.log('[AUTH] Saving credentials to store for:', connectionId)
+      log.info('[AUTH] Saving credentials to store for:', connectionId)
       await credsStore.save(connectionId, creds)
-      console.log('[AUTH] Credentials saved successfully')
+      log.info('[AUTH] Credentials saved successfully')
       
       // Test the credentials immediately
-      console.log('[AUTH] Testing credentials with network request to:', req.baseUrl)
+      log.info('[AUTH] Testing credentials with network request to:', req.baseUrl)
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/json,*/*',
         'Cache-Control': 'no-cache'
@@ -1813,27 +1813,27 @@ function setupIpcHandlers() {
       try {
         const response = await makeNetworkRequest(req.baseUrl, 'GET', headers, undefined, creds)
         
-        console.log('[AUTH] Credential test response status:', response.status)
-        console.log('[AUTH] Credential test response headers:', JSON.stringify(response.headers, null, 2))
+        log.info('[AUTH] Credential test response status:', response.status)
+        log.info('[AUTH] Credential test response headers:', JSON.stringify(response.headers, null, 2))
         
         if (response.status >= 200 && response.status < 400) {
-          console.log(`[AUTH] Credentials validated successfully for ${connectionId}`)
+          log.info(`[AUTH] Credentials validated successfully for ${connectionId}`)
           return { ok: true }
         } else if (response.status === 401 || response.status === 403) {
-          console.log(`[AUTH] Credentials rejected for ${connectionId} (status ${response.status})`)
-          console.log('[AUTH] Response body (first 500 chars):', response.body.substring(0, 500))
+          log.info(`[AUTH] Credentials rejected for ${connectionId} (status ${response.status})`)
+          log.info('[AUTH] Response body (first 500 chars):', response.body.substring(0, 500))
           return { ok: false, error: 'Invalid credentials - authentication failed' }
         } else {
-          console.log(`[AUTH] Unexpected status ${response.status} when validating credentials for ${connectionId}`)
+          log.info(`[AUTH] Unexpected status ${response.status} when validating credentials for ${connectionId}`)
           return { ok: false, error: `Server returned ${response.status}` }
         }
       } catch (networkError) {
         const errorMessage = networkError instanceof Error ? networkError.message : String(networkError)
-        console.error(`[AUTH] Network error validating credentials for ${connectionId}:`, errorMessage)
+        log.error(`[AUTH] Network error validating credentials for ${connectionId}:`, errorMessage)
         return { ok: false, error: `Network error: ${errorMessage}` }
       }
     } catch (error) {
-      console.error(`[ERROR] Failed to provide credentials:`, error)
+      log.error(`[ERROR] Failed to provide credentials:`, error)
       return { ok: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   })
@@ -1951,18 +1951,18 @@ function setupIpcHandlers() {
       
       // Fetch metadata from API using saved connection credentials (if any)
       // If no credentials are saved, Windows integrated auth will be used
-      console.log('[WORKFLOW] Retrieving credentials for connection:', connectionName)
+      log.info('[WORKFLOW] Retrieving credentials for connection:', connectionName)
       const credentials = await credsStore.get(connectionName)
-      console.log('[WORKFLOW] Credentials found:', !!credentials)
+      log.info('[WORKFLOW] Credentials found:', !!credentials)
       if (credentials) {
-        console.log('[WORKFLOW] Using credentials - Domain:', credentials.domain, 'Username:', credentials.username)
+        log.info('[WORKFLOW] Using credentials - Domain:', credentials.domain, 'Username:', credentials.username)
       } else {
-        console.log('[WORKFLOW] No credentials found - will use Windows Integrated Auth')
+        log.info('[WORKFLOW] No credentials found - will use Windows Integrated Auth')
       }
       
-      console.log('[WORKFLOW] Fetching metadata for', idguids.length, 'users from:', request.apiUrl)
+      log.info('[WORKFLOW] Fetching metadata for', idguids.length, 'users from:', request.apiUrl)
       const metadata = await fetchAllMetadata(idguids, request.apiUrl, credentials || undefined)
-      console.log('[WORKFLOW] Metadata fetch complete. Retrieved', metadata.size, 'entries')
+      log.info('[WORKFLOW] Metadata fetch complete. Retrieved', metadata.size, 'entries')
       
       // Coverage gate: ensure we have usable metadata for all IDs
       const missingIds: string[] = []

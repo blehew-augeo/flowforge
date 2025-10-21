@@ -3,96 +3,37 @@ import path from 'node:path'
 import { URL } from 'node:url'
 import * as fs from 'fs'
 import * as crypto from 'crypto'
-import keytar from 'keytar'
 import * as XLSX from 'xlsx'
 import pkg from 'electron-updater'
 const { autoUpdater } = pkg
 import log from 'electron-log'
-
-// =============================================================================
-// SETTINGS MANAGER
-// =============================================================================
-
-export interface AppSettings {
-  companyName: string
-  defaultApiUrl: string
-  emailDomainKeywords: string[]
-}
-
-const DEFAULT_SETTINGS: AppSettings = {
-  companyName: '',
-  defaultApiUrl: '',
-  emailDomainKeywords: []
-}
-
-class SettingsManager {
-  private settingsPath: string
-  private settings: AppSettings
-
-  constructor() {
-    // Store settings in user data directory
-    const userDataPath = app.getPath('userData')
-    this.settingsPath = path.join(userDataPath, 'app-settings.json')
-    this.settings = this.loadSettings()
-  }
-
-  private loadSettings(): AppSettings {
-    try {
-      if (fs.existsSync(this.settingsPath)) {
-        const data = fs.readFileSync(this.settingsPath, 'utf-8')
-        const loaded = JSON.parse(data) as Partial<AppSettings>
-        
-        // Merge with defaults to ensure all fields exist
-        return {
-          ...DEFAULT_SETTINGS,
-          ...loaded
-        }
-      }
-    } catch (error) {
-      console.error('[ERROR] Failed to load settings:', error)
-    }
-    
-    return { ...DEFAULT_SETTINGS }
-  }
-
-  private saveSettings(): void {
-    try {
-      const userDataPath = app.getPath('userData')
-      fs.mkdirSync(userDataPath, { recursive: true })
-      fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf-8')
-    } catch (error) {
-      console.error('[ERROR] Failed to save settings:', error)
-      throw error
-    }
-  }
-
-  getSettings(): AppSettings {
-    return { ...this.settings }
-  }
-
-  updateSettings(updates: Partial<AppSettings>): void {
-    this.settings = {
-      ...this.settings,
-      ...updates
-    }
-    this.saveSettings()
-  }
-
-  resetSettings(): void {
-    this.settings = { ...DEFAULT_SETTINGS }
-    this.saveSettings()
-  }
-}
-
-// Global settings manager instance
-let settingsManager: SettingsManager
-
-export function getSettingsManager(): SettingsManager {
-  if (!settingsManager) {
-    settingsManager = new SettingsManager()
-  }
-  return settingsManager
-}
+import type {
+  AppSettings,
+  DataRow,
+  NtlmCredentials,
+  UserMetadata,
+  PipelineConfig,
+  PipelineResult,
+  ValidationError,
+  FilePreview,
+  HttpAuth,
+  HttpReq,
+  HttpRes,
+  NetworkRequest,
+  NetworkResponse,
+  AuthPreflightMode,
+  AuthPreflightRequest,
+  AuthPreflightResponse,
+  AuthProvideCredentialsRequest,
+  AuthProvideCredentialsResponse,
+  ApiUserMetadata,
+  UserMetadataFull,
+  CredsStore
+} from './types'
+import { getSettingsManager } from './SettingsManager'
+import { KeytarCredsStore } from './KeytarCredsStore'
+import { InMemoryCredsStore } from './InMemoryCredsStore'
+import { applyTransformRules } from './transformRules'
 
 // =============================================================================
 // SECURITY UTILITIES
@@ -122,7 +63,7 @@ function isValidFilePath(filePath: string): boolean {
   // On Windows, reject UNC paths that might access network resources unexpectedly
   if (process.platform === 'win32' && absolutePath.startsWith('\\\\')) {
     // Allow if it's a legitimate long path, but log it
-    console.log('[SECURITY] UNC path access attempted:', absolutePath)
+    log.warn('[SECURITY] UNC path access attempted:', absolutePath)
   }
   
   return true
@@ -142,7 +83,7 @@ function isValidUrl(url: string): boolean {
     
     // Only allow http and https protocols
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      console.error('[SECURITY] Invalid protocol:', parsed.protocol)
+      log.error('[SECURITY] Invalid protocol:', parsed.protocol)
       return false
     }
     
@@ -151,7 +92,7 @@ function isValidUrl(url: string): boolean {
     
     // Check for localhost variations
     if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
-      console.warn('[SECURITY] Localhost access attempted:', url)
+      log.warn('[SECURITY] Localhost access attempted:', url)
       // Allow for development but log it
       if (process.env['NODE_ENV'] === 'development' || process.env['VITE_DEV_SERVER_URL']) {
         return true
@@ -163,13 +104,13 @@ function isValidUrl(url: string): boolean {
     if (hostname.startsWith('192.168.') || 
         hostname.startsWith('10.') || 
         hostname.match(/^172\.(1[6-9]|2[0-9]|3[0-1])\./)) {
-      console.warn('[SECURITY] Private IP access attempted:', url)
+      log.warn('[SECURITY] Private IP access attempted:', url)
       // These might be legitimate corporate networks, so allow but log
     }
     
     return true
   } catch (error) {
-    console.error('[SECURITY] Invalid URL format:', url)
+    log.error('[SECURITY] Invalid URL format:', url)
     return false
   }
 }
@@ -192,224 +133,8 @@ function sanitizeString(input: string, maxLength: number = 1000): string {
 }
 
 // =============================================================================
-// TYPE DEFINITIONS
-// =============================================================================
-
-// Core data types
-export type DataRow = Record<string, unknown>
-
-export interface NtlmCredentials {
-  domain: string
-  username: string
-  password: string
-}
-
-export interface UserMetadata {
-  user_id: string
-  email: string
-  emails?: string[] | undefined
-  first_name?: string
-  last_name?: string
-}
-
-export interface PipelineConfig {
-  inputPath: string
-  outputPath: string
-  outputFormat: 'xlsx' | 'csv'
-  artifactDir: string
-  metadata?: Map<string, UserMetadata>
-}
-
-export interface PipelineResult {
-  ok: boolean
-  artifactDir: string
-  reportPath: string
-  counts: {
-    in: number
-    out: number
-    errors: number
-  }
-  timings: Record<string, number>
-  notes: string[]
-  artifactHash: string
-}
-
-export interface ValidationError {
-  row: number
-  field: string
-  message: string
-}
-
-export interface FilePreview {
-  name: string
-  rows: number
-  sample: Array<Record<string, unknown>>
-}
-
-export type HttpAuth = {
-  kind: 'none' | 'basic' | 'bearer' | 'ntlm'
-  username?: string
-  password?: string
-  domain?: string
-  workstation?: string
-  token?: string
-}
-
-export type HttpReq = {
-  url: string
-  method?: string
-  headers?: Record<string, string>
-  body?: string
-  timeoutMs?: number
-  auth?: HttpAuth
-}
-
-export type HttpRes = {
-  ok: boolean
-  status: number
-  statusText: string
-  headers: Record<string, string>
-  bodyText: string
-}
-
-export type NetworkRequest = {
-  method?: string
-  url: string
-  headers?: Record<string, string>
-  body?: string
-  connectionId?: string
-}
-
-export type NetworkResponse = {
-  ok: boolean
-  status: number
-  statusText: string
-  headers: Record<string, string>
-  bodyText: string
-}
-
-export type AuthPreflightMode = 'silent-ok' | 'auth-required' | 'needs-vpn' | 'unreachable'
-
-export interface AuthPreflightRequest {
-  connectionId: string
-  baseUrl: string
-}
-
-export interface AuthPreflightResponse {
-  mode: AuthPreflightMode
-  details?: string
-}
-
-export interface AuthProvideCredentialsRequest {
-  connectionId: string
-  baseUrl: string
-  domain: string
-  username: string
-  password: string
-}
-
-export interface AuthProvideCredentialsResponse {
-  ok: boolean
-  error?: string
-}
-
-interface ApiUserMetadata {
-  IDGUID: string
-  FirstName?: string
-  LastName?: string
-  UserName?: string
-  ExternalCode?: string
-  Email?: string
-  Metadata?: Array<{
-    Name: string
-    StoredValue: string
-  }>
-}
-
-interface UserMetadataFull {
-  user_id: string
-  email: string
-  emails?: string[] | undefined
-  first_name?: string
-  last_name?: string
-}
-
-// =============================================================================
 // CREDENTIALS STORE
 // =============================================================================
-
-export interface CredsStore {
-  save(name: string, creds: NtlmCredentials): Promise<void>
-  has(name: string): Promise<boolean>
-  del(name: string): Promise<boolean>
-  list(): Promise<string[]>
-  get(name: string): Promise<NtlmCredentials | null>
-}
-
-const SERVICE_NAME = 'dws/ntlm'
-
-export class KeytarCredsStore implements CredsStore {
-  async save(name: string, creds: NtlmCredentials): Promise<void> {
-    const secret = JSON.stringify(creds)
-    await keytar.setPassword(SERVICE_NAME, name, secret)
-  }
-
-  async has(name: string): Promise<boolean> {
-    const password = await keytar.getPassword(SERVICE_NAME, name)
-    return password !== null
-  }
-
-  async del(name: string): Promise<boolean> {
-    return await keytar.deletePassword(SERVICE_NAME, name)
-  }
-
-  async list(): Promise<string[]> {
-    const credentials = await keytar.findCredentials(SERVICE_NAME)
-    return credentials.map(c => c.account)
-  }
-
-  async get(name: string): Promise<NtlmCredentials | null> {
-    const secret = await keytar.getPassword(SERVICE_NAME, name)
-    if (secret === null) {
-      return null
-    }
-    try {
-      return JSON.parse(secret) as NtlmCredentials
-    } catch {
-      return null
-    }
-  }
-}
-
-// In-memory store for testing
-export class InMemoryCredsStore implements CredsStore {
-  private store: Map<string, NtlmCredentials> = new Map()
-
-  async save(name: string, creds: NtlmCredentials): Promise<void> {
-    this.store.set(name, creds)
-  }
-
-  async has(name: string): Promise<boolean> {
-    return this.store.has(name)
-  }
-
-  async del(name: string): Promise<boolean> {
-    return this.store.delete(name)
-  }
-
-  async list(): Promise<string[]> {
-    return Array.from(this.store.keys())
-  }
-
-  async get(name: string): Promise<NtlmCredentials | null> {
-    return this.store.get(name) ?? null
-  }
-
-  // Test utility to clear all
-  clear(): void {
-    this.store.clear()
-  }
-}
 
 // Global instance - can be swapped for testing
 let credsStoreInstance: CredsStore = new KeytarCredsStore()
@@ -620,28 +345,28 @@ export async function fetchUserMetadata(
     const response = await makeNetworkRequest(endpoint, 'POST', headers, body, credentials)
     
     if (response.status < 200 || response.status >= 300) {
-      console.error(`[ERROR] Metadata request failed for ${idguid}`)
-      console.error(`[ERROR] Status: ${response.status}`)
-      console.error(`[ERROR] Headers:`, JSON.stringify(response.headers, null, 2))
-      console.error(`[ERROR] Full response body:`, response.body)
+      log.error(`[ERROR] Metadata request failed for ${idguid}`)
+      log.error(`[ERROR] Status: ${response.status}`)
+      log.error(`[ERROR] Headers:`, JSON.stringify(response.headers, null, 2))
+      log.error(`[ERROR] Full response body:`, response.body)
       return { user_id: idguid, email: '' }
     }
     
     const contentType = String(response.headers['content-type'] || '')
     if (!contentType.toLowerCase().includes('application/json')) {
-      console.error(`[ERROR] Non-JSON response for ${idguid}`)
-      console.error(`[ERROR] Content-Type: ${contentType || 'unknown'}`)
-      console.error(`[ERROR] Full response body:`, response.body)
+      log.error(`[ERROR] Non-JSON response for ${idguid}`)
+      log.error(`[ERROR] Content-Type: ${contentType || 'unknown'}`)
+      log.error(`[ERROR] Full response body:`, response.body)
       return { user_id: idguid, email: '' }
     }
     
     const data = JSON.parse(response.body) as ApiUserMetadata
     
     if (!data || !data.IDGUID) {
-      console.error(`[ERROR] No IDGUID in response for ${idguid}`)
-      console.error(`[ERROR] Status: ${response.status}`)
-      console.error(`[ERROR] Headers:`, JSON.stringify(response.headers, null, 2))
-      console.error(`[ERROR] Full response body:`, response.body)
+      log.error(`[ERROR] No IDGUID in response for ${idguid}`)
+      log.error(`[ERROR] Status: ${response.status}`)
+      log.error(`[ERROR] Headers:`, JSON.stringify(response.headers, null, 2))
+      log.error(`[ERROR] Full response body:`, response.body)
       return { user_id: idguid, email: '' }
     }
     
@@ -669,9 +394,9 @@ export async function fetchUserMetadata(
     
     return result
   } catch (error) {
-    console.error(`[ERROR] Failed to fetch metadata for ${idguid}`)
-    console.error(`[ERROR] Request URL: ${endpoint}`)
-    console.error(`[ERROR] Error details:`, error)
+    log.error(`[ERROR] Failed to fetch metadata for ${idguid}`)
+    log.error(`[ERROR] Request URL: ${endpoint}`)
+    log.error(`[ERROR] Error details:`, error)
     return { user_id: idguid, email: '' }
   }
 }
@@ -700,7 +425,7 @@ async function warmUpAdminSession(apiUrl: string, credentials: NtlmCredentials |
     const cookieHeader = extractCookieHeader(response.headers['set-cookie'])
     return cookieHeader
   } catch (error) {
-    console.error('[ERROR] Session warm-up failed:', error)
+    log.error('[ERROR] Session warm-up failed:', error)
     return undefined
   }
 }
@@ -1012,136 +737,7 @@ export function validateRows(rows: DataRow[]): ValidationError[] {
 // =============================================================================
 // TRANSFORMATION RULES
 // =============================================================================
-
-function normalizeEmail(email: string): string {
-  return email.toLowerCase().trim()
-}
-
-function extractNameParts(email: string): Set<string> {
-  if (!email || !email.includes('@')) {
-    return new Set()
-  }
-  
-  const emailParts = email.split('@')
-  const localPart = (emailParts[0] || '').toLowerCase()
-  const parts = new Set<string>()
-  
-  for (const separator of ['.', '_', '-', '+']) {
-    localPart.split(separator).forEach(part => {
-      if (part.trim()) {
-        parts.add(part.trim())
-      }
-    })
-  }
-  
-  return parts
-}
-
-function checkEmailMatchesMetadata(orderEmail: string, primaryEmailOrList: string | string[] | undefined): boolean {
-  if (!orderEmail || !primaryEmailOrList) return false
-  const normalizedOrder = normalizeEmail(orderEmail)
-  if (Array.isArray(primaryEmailOrList)) {
-    return primaryEmailOrList.some(e => e && normalizeEmail(e) === normalizedOrder)
-  }
-  return normalizeEmail(primaryEmailOrList) === normalizedOrder
-}
-
-function checkEmailContainsName(orderEmail: string, firstName?: string, lastName?: string): boolean {
-  if (!orderEmail) {
-    return false
-  }
-  
-  const emailParts = extractNameParts(orderEmail)
-  
-  if (firstName) {
-    const firstLower = firstName.toLowerCase().trim()
-    if (emailParts.has(firstLower) || Array.from(emailParts).some(part => part.includes(firstLower))) {
-      return true
-    }
-  }
-  
-  if (lastName) {
-    const lastLower = lastName.toLowerCase().trim()
-    if (emailParts.has(lastLower) || Array.from(emailParts).some(part => part.includes(lastLower))) {
-      return true
-    }
-  }
-  
-  return false
-}
-
-function checkCompanyDomain(orderEmail: string, domainKeywords: string[]): boolean {
-  if (!orderEmail || !orderEmail.includes('@')) {
-    return false
-  }
-  
-  if (!domainKeywords || domainKeywords.length === 0) {
-    return false
-  }
-  
-  const emailParts = orderEmail.split('@')
-  const domain = (emailParts[1] || '').toLowerCase()
-  
-  // Check if domain contains any of the configured keywords
-  return domainKeywords.some(keyword => domain.includes(keyword.toLowerCase()))
-}
-
-function checkSocialGood(productType: string): boolean {
-  if (!productType) return false
-  return productType.trim().toLowerCase() === 'social good'
-}
-
-export function applyTransformRules(rows: DataRow[], metadata?: Map<string, UserMetadataFull>, domainKeywords?: string[], companyName?: string): DataRow[] {
-  return rows.map(row => {
-    const orderEmail = String(row['Email Address'] || '')
-    const userIdGuid = String(row['User Name'] || '')
-    const productType = String(row['Product Type'] || '')
-    
-    let decision = 'N'
-    let reason = 'No verification rule matched'
-    
-    // Get user metadata if available
-    const userMeta = metadata?.get(userIdGuid)
-    
-    // Rule 1: Email matches metadata (requires user metadata)
-    if (userMeta && checkEmailMatchesMetadata(orderEmail, userMeta.emails ?? userMeta.email)) {
-      decision = 'Y'
-      reason = 'Email matches user metadata'
-    }
-    // Rule 2: Email contains user's name (requires user metadata)
-    else if (userMeta && checkEmailContainsName(orderEmail, userMeta.first_name, userMeta.last_name)) {
-      decision = 'Y'
-      const fullName = `${userMeta.first_name || ''} ${userMeta.last_name || ''}`.trim()
-      reason = `Email contains user name (${fullName})`
-    }
-    // Rule 3: Company domain (does NOT require user metadata)
-    else if (domainKeywords && domainKeywords.length > 0 && checkCompanyDomain(orderEmail, domainKeywords)) {
-      decision = 'Y'
-      const displayName = companyName || 'company'
-      reason = `Email is under ${displayName} domain`
-    }
-    // Rule 4: Social Good product (does NOT require user metadata)
-    else if (checkSocialGood(productType)) {
-      decision = 'Y'
-      reason = 'Product type is Social Good'
-    }
-    
-
-
-    // Create output row with Decision and Reason first
-    const outputRow: DataRow = {
-      'Decision': decision,
-      'Reason': reason
-    }
-    
-    // Copy all other fields in their original order
-    for (const [key, value] of Object.entries(row)) {
-      outputRow[key] = value
-    }
-    
-    return outputRow
-  })
-}
+// Transformation rules moved to transformRules.ts
 
 // =============================================================================
 // PIPELINE ORCHESTRATOR
@@ -1159,7 +755,7 @@ export async function runPipeline(config: PipelineConfig): Promise<PipelineResul
   const logStream = fs.createWriteStream(logPath, { flags: 'w' })
   
   function log(_message: string): void {
-    // info logging disabled; keep errors only via console.error paths
+    // info logging disabled; keep errors only via log.error paths
   }
   
   try {
@@ -1282,8 +878,15 @@ export async function runPipeline(config: PipelineConfig): Promise<PipelineResul
       artifactHash: hash
     }
     
-    // Write report.json
-    fs.writeFileSync(result.reportPath, JSON.stringify(result, null, 2), 'utf-8')
+    // Write report.json with source and output data
+    const reportWithData = {
+      ...result,
+      sourceDataSample: sourceData.slice(0, 100),
+      outputDataSample: transformedData.slice(0, 100),
+      sourceDataCount: sourceData.length,
+      outputDataCount: transformedData.length,
+    }
+    fs.writeFileSync(result.reportPath, JSON.stringify(reportWithData, null, 2), 'utf-8')
     
     logStream.end()
     return result
@@ -1311,7 +914,7 @@ export function registerHttpBridge() {
     try {
       // Validate URL before making request
       if (!isValidUrl(req.url)) {
-        console.error('[SECURITY] Invalid or unsafe URL rejected:', req.url)
+        log.error('[SECURITY] Invalid or unsafe URL rejected:', req.url)
         return {
           ok: false,
           status: 0,
@@ -1338,11 +941,11 @@ export function registerHttpBridge() {
       const ok = response.status >= 200 && response.status < 300
       
       if (!ok) {
-        console.error(`[ERROR] Network request failed with status ${response.status}`)
-        console.error(`[ERROR] Method: ${method}`)
-        console.error(`[ERROR] URL: ${req.url}`)
-        console.error(`[ERROR] Headers:`, JSON.stringify(response.headers, null, 2))
-        console.error(`[ERROR] Response body:`, response.body)
+        log.error(`[ERROR] Network request failed with status ${response.status}`)
+        log.error(`[ERROR] Method: ${method}`)
+        log.error(`[ERROR] URL: ${req.url}`)
+        log.error(`[ERROR] Headers:`, JSON.stringify(response.headers, null, 2))
+        log.error(`[ERROR] Response body:`, response.body)
       }
       
       return {
@@ -1353,10 +956,10 @@ export function registerHttpBridge() {
         bodyText: response.body
       }
     } catch (error) {
-      console.error(`[ERROR] Network request exception`)
-      console.error(`[ERROR] Method: ${req.method || 'GET'}`)
-      console.error(`[ERROR] URL: ${req.url}`)
-      console.error(`[ERROR] Error details:`, error)
+      log.error(`[ERROR] Network request exception`)
+      log.error(`[ERROR] Method: ${req.method || 'GET'}`)
+      log.error(`[ERROR] URL: ${req.url}`)
+      log.error(`[ERROR] Error details:`, error)
       return {
         ok: false,
         status: 0,
@@ -1374,7 +977,7 @@ export function registerHttpBridge() {
     try {
       // Validate URL before making request
       if (!isValidUrl(req.url)) {
-        console.error('[SECURITY] Invalid or unsafe URL rejected:', req.url)
+        log.error('[SECURITY] Invalid or unsafe URL rejected:', req.url)
         return {
           ok: false,
           status: 0,
@@ -1402,11 +1005,11 @@ export function registerHttpBridge() {
       const ok = response.status >= 200 && response.status < 300
       
       if (!ok) {
-        console.error(`[ERROR] HTTP request failed with status ${response.status}`)
-        console.error(`[ERROR] Method: ${method}`)
-        console.error(`[ERROR] URL: ${req.url}`)
-        console.error(`[ERROR] Headers:`, JSON.stringify(response.headers, null, 2))
-        console.error(`[ERROR] Response body:`, response.body)
+        log.error(`[ERROR] HTTP request failed with status ${response.status}`)
+        log.error(`[ERROR] Method: ${method}`)
+        log.error(`[ERROR] URL: ${req.url}`)
+        log.error(`[ERROR] Headers:`, JSON.stringify(response.headers, null, 2))
+        log.error(`[ERROR] Response body:`, response.body)
       }
       
       return {
@@ -1417,10 +1020,10 @@ export function registerHttpBridge() {
         bodyText: response.body
       }
     } catch (error) {
-      console.error(`[ERROR] HTTP request exception`)
-      console.error(`[ERROR] Method: ${req.method || 'GET'}`)
-      console.error(`[ERROR] URL: ${req.url}`)
-      console.error(`[ERROR] Error details:`, error)
+      log.error(`[ERROR] HTTP request exception`)
+      log.error(`[ERROR] Method: ${req.method || 'GET'}`)
+      log.error(`[ERROR] URL: ${req.url}`)
+      log.error(`[ERROR] Error details:`, error)
       return {
         ok: false,
         status: 0,
@@ -1473,13 +1076,13 @@ function createWindow() {
     }
     
     // Block all other navigation attempts
-    console.warn('[SECURITY] Blocked navigation attempt to:', navigationUrl)
+    log.warn('[SECURITY] Blocked navigation attempt to:', navigationUrl)
     event.preventDefault()
   })
 
   // Security: Prevent opening new windows
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    console.warn('[SECURITY] Blocked window.open attempt to:', url)
+    log.warn('[SECURITY] Blocked window.open attempt to:', url)
     return { action: 'deny' }
   })
 }
@@ -2121,8 +1724,8 @@ function setupIpcHandlers() {
         reportPath: absoluteReportPath
       }
     } catch (error) {
-      console.error('[ERROR] Workflow failed')
-      console.error('[ERROR] Error details:', error)
+      log.error('[ERROR] Workflow failed')
+      log.error('[ERROR] Error details:', error)
       return {
         ok: false,
         artifactDir: '',

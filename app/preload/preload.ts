@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld('api', {
     get: () => ipcRenderer.invoke('settings:get'),
     update: (updates: any) => ipcRenderer.invoke('settings:update', updates),
     reset: () => ipcRenderer.invoke('settings:reset')
+  },
+
+  // App operations
+  app: {
+    dumpState: (state: any) => ipcRenderer.invoke('app:dumpState', state)
   }
 
 })

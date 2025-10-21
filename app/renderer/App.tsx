@@ -8,20 +8,6 @@ interface FilePreview {
   sample: Array<Record<string, unknown>>
 }
 
-interface RunWorkflowRequest {
-  inputPath: string
-  connectionName: string
-  apiUrl: string
-  metadataPath?: string
-}
-
-interface RunWorkflowResponse {
-  ok: boolean
-  artifactDir: string
-  reportPath: string
-  error?: string
-}
-
 interface AppSettings {
   companyName: string
   defaultApiUrl: string
@@ -719,6 +705,7 @@ function App() {
       setLoading(false)
     }
   }
+
 
   return (
     <div style={{ fontFamily: 'Arial, sans-serif', padding: '20px' }}>

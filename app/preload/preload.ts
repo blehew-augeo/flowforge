@@ -8,6 +8,7 @@ import type {
   AuthProvideCredentialsRequest,
   AppSettings
 } from './types'
+import { dbApi } from './db'
 
 // Expose API to renderer via contextBridge
 // All handlers are typed and map directly to IPC channels
@@ -58,3 +59,6 @@ contextBridge.exposeInMainWorld('api', {
     reset: () => ipcRenderer.invoke('settings:reset')
   }
 })
+
+// Expose database API to renderer
+contextBridge.exposeInMainWorld('db', dbApi)

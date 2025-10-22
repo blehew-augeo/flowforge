@@ -10,6 +10,7 @@ import { registerFileHandlers } from './fileHandlers'
 import { registerWorkflowHandlers } from './workflowHandlers'
 import { registerSystemHandlers } from './systemHandlers'
 import { registerSettingsHandlers } from './settingsHandlers'
+import { registerDbHandlers } from './dbHandlers'
 
 /**
  * Register all IPC handlers once
@@ -32,6 +33,13 @@ export function registerIpc(ctx: IpcContext): void {
     registerWorkflowHandlers(ctx)
     registerSystemHandlers(ctx)
     registerSettingsHandlers(ctx)
+    
+    // Register database handlers if db context is provided
+    if (ctx.db) {
+      registerDbHandlers(ctx as IpcContext & { db: Required<IpcContext>['db'] })
+    } else {
+      log.warn('[IPC] Database context not provided - skipping DB handlers')
+    }
 
     // Mark as registered to prevent duplicates
     markRegistered()

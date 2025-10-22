@@ -13,6 +13,7 @@ import { InMemoryCredsStore } from './InMemoryCredsStore'
 import { registerIpc } from './ipc'
 import type { IpcContext } from './ipc'
 import { registerConnection } from './connectionRegistry'
+import { initDb, closeDb, dbContext } from './db'
 
 // =============================================================================
 // CREDENTIALS STORE
@@ -212,6 +213,15 @@ app.whenReady().then(async () => {
     setCredsStore(new InMemoryCredsStore())
   }
 
+  // Initialize database
+  try {
+    initDb()
+    log.info('[APP] Database initialized')
+  } catch (error) {
+    log.error('[APP] Failed to initialize database:', error)
+    // Continue without database - handlers will be skipped
+  }
+
   // Register default connection (always available)
   registerConnection('default')
   
@@ -231,10 +241,11 @@ app.whenReady().then(async () => {
     })
   })
 
-  // Register all IPC handlers
+  // Register all IPC handlers with database context
   const ipcContext: IpcContext = {
     credsStore: getCredsStore(),
-    settingsManager
+    settingsManager,
+    db: dbContext
   }
   registerIpc(ipcContext)
   
@@ -274,4 +285,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  // Clean up database connection
+  closeDb()
+  log.info('[APP] Application shutting down')
 })

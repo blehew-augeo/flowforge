@@ -2,6 +2,7 @@
 
 import type { CredsStore } from '../types'
 import type { SettingsManager } from '../SettingsManager'
+import type { DbContext } from '../db'
 
 /**
  * Context passed to IPC registration functions
@@ -10,7 +11,7 @@ import type { SettingsManager } from '../SettingsManager'
 export interface IpcContext {
   credsStore: CredsStore
   settingsManager: SettingsManager
-  // Add other dependencies as needed (e.g., eventStore, projectionStore, etc.)
+  db?: DbContext // Optional for gradual migration
 }
 
 /**

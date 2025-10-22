@@ -134,9 +134,65 @@ export interface ApiInterface {
   }
 }
 
+// Database types
+export interface DbEvent {
+  aggregateId: string
+  seq: number
+  eventType: string
+  payload: Record<string, unknown>
+  timestamp: string
+  metadata?: Record<string, unknown>
+}
+
+export interface DbSnapshot {
+  aggregateId: string
+  lastSeq: number
+  state: Record<string, unknown>
+  timestamp: string
+}
+
+export interface DbApiInterface {
+  appendEvent: (payload: {
+    aggregateId: string
+    eventType: string
+    payload: Record<string, unknown>
+    metadata?: Record<string, unknown>
+  }) => Promise<DbEvent>
+
+  loadEvents: (args: {
+    aggregateId: string
+    afterSeq?: number
+  }) => Promise<DbEvent[]>
+
+  latestSnapshot: (args: {
+    aggregateId: string
+  }) => Promise<DbSnapshot | null>
+
+  saveSnapshot: (snapshot: {
+    aggregateId: string
+    lastSeq: number
+    state: Record<string, unknown>
+  }) => Promise<void>
+
+  queryProjection: (args: {
+    sql: string
+    params?: unknown[]
+  }) => Promise<Array<Record<string, unknown>>>
+
+  upsertProjection: (args: {
+    table: string
+    rows: Array<Record<string, unknown>>
+  }) => Promise<void>
+
+  truncateProjection: (args: {
+    table: string
+  }) => Promise<void>
+}
+
 declare global {
   interface Window {
     api: ApiInterface
+    db: DbApiInterface
   }
 }
 

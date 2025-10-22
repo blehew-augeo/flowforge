@@ -215,7 +215,7 @@ app.whenReady().then(async () => {
 
   // Initialize database
   try {
-    initDb()
+    await initDb()
     log.info('[APP] Database initialized')
   } catch (error) {
     log.error('[APP] Failed to initialize database:', error)

@@ -132,10 +132,6 @@ export interface ApiInterface {
     update: (updates: Partial<AppSettings>) => Promise<void>
     reset: () => Promise<void>
   }
-  
-  app: {
-    dumpState: (state: any) => Promise<string>
-  }
 }
 
 declare global {
